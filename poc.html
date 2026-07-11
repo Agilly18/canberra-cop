@@ -60,6 +60,7 @@
   <label><input type="checkbox" id="tog-ac" checked> aircraft <span id="ac-count" style="color:var(--dim)"></span></label>
   <label><input type="checkbox" id="tog-radar" checked> rain radar</label>
   <label><input type="checkbox" id="tog-esa" checked> esa incidents <span id="esa-count" style="color:var(--dim)"></span></label>
+  <label><input type="checkbox" id="tog-traffic"> traffic flow <span id="traffic-note" style="color:var(--dim)"></span></label>
   <div class="legend"><b class="lo">▲ &lt;10k ft</b><b class="hi">▲ ≥10k ft</b><b class="ml">▲ military</b></div>
   <div id="aclist"></div>
   <div id="status"><div id="dot"></div><span id="status-text">connecting…</span></div>
@@ -292,6 +293,30 @@ document.getElementById('tog-radar').onchange = e =>
   map.setLayoutProperty('radar', 'visibility', e.target.checked ? 'visible' : 'none');
 document.getElementById('tog-esa').onchange = e =>
   map.setLayoutProperty('esa', 'visibility', e.target.checked ? 'visible' : 'none');
+
+// Traffic tiles cost API quota, so the layer is off by default and only
+// created on first toggle. Key stays in serve.py; page never sees it.
+document.getElementById('tog-traffic').onchange = async e => {
+  const note = document.getElementById('traffic-note');
+  if (!map.getSource('traffic')) {
+    try {
+      const probe = await fetch('tomtom/9/468/314.png');
+      if (!probe.ok) throw new Error(probe.status);
+      map.addSource('traffic', { type: 'raster',
+        tiles: [`${location.origin}/tomtom/{z}/{x}/{y}.png`],
+        tileSize: 256, minzoom: 6, maxzoom: 16 });
+      map.addLayer({ id: 'traffic', type: 'raster', source: 'traffic',
+        paint: { 'raster-opacity': 0.8 } }, 'aircraft');
+      note.textContent = '';
+    } catch (err) {
+      note.textContent = '(needs serve.py + key)';
+      e.target.checked = false;
+      return;
+    }
+  }
+  map.setLayoutProperty('traffic', 'visibility',
+    e.target.checked ? 'visible' : 'none');
+};
 </script>
 </body>
 </html>

@@ -14,7 +14,11 @@ cheap: every data source is free.
 - **Rain radar** overlay ([RainViewer](https://www.rainviewer.com)).
 - **Live emergency incidents** — fires, ambulance callouts, rescues — from the
   [ACT Emergency Services Agency](https://esa.act.gov.au) dispatch feed
-  (CC-BY 4.0, updated every 60 s). 
+  (CC-BY 4.0, updated every 60 s).
+- **Traffic flow** ([TomTom](https://developer.tomtom.com), optional) —
+  green/amber/red road congestion. Needs a free API key in `.env`
+  (`TOMTOM_API_KEY=...`); the layer is off by default and simply stays
+  unavailable without one.
 
 ## Running it
 
@@ -31,9 +35,8 @@ server relays it.)
 
 ## Roadmap
 
-- **Phase 2** — proper backend (FastAPI container), TomTom traffic flow,
-  Transport Canberra GTFS-realtime (live buses/light rail), NASA FIRMS fire
-  hotspots.
+- **Phase 2** — proper backend (FastAPI container), Transport Canberra
+  GTFS-realtime (live buses/light rail), NASA FIRMS fire hotspots.
 - **Phase 3** — alert rules (loitering aircraft, incidents near a watchpoint,
   storm cells inbound), per-decision saved views, time slider.
 - **Someday** — a local RTL-SDR receiver as a first-party ADS-B sensor.

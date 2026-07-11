@@ -25,6 +25,7 @@ import os
 import re
 import struct
 import time
+import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
@@ -132,6 +133,44 @@ def news_body():
         _news_cache.update(time=time.time(),
                            body=json.dumps(items[:12]).encode())
     return _news_cache["body"]
+
+
+# --- address search (geocoding) ----------------------------------------------
+# Nominatim (OpenStreetMap) is free and keyless but asks callers to identify
+# themselves and keep volume low. Relaying here lets us set a real User-Agent
+# (a browser can't) and bias results to the Canberra region. Results are
+# cached per query and upstream calls throttled to Nominatim's 1 req/s limit.
+NOMINATIM = "https://nominatim.openstreetmap.org/search"
+GEOCODE_UA = "canberra-cop/1.0 (personal situational-awareness map)"
+# lon,lat,lon,lat box around the ACT — biases but doesn't hard-limit results
+GEOCODE_VIEWBOX = "148.6,-35.05,149.5,-35.65"
+GEOCODE_CACHE_SECONDS = 3600
+_geocode_cache = {}
+_geocode_last = [0.0]
+
+
+def geocode_body(q):
+    key = q.lower().strip()
+    hit = _geocode_cache.get(key)
+    if hit and time.time() - hit[0] < GEOCODE_CACHE_SECONDS:
+        return hit[1]
+    wait = 1.0 - (time.time() - _geocode_last[0])  # be polite: ≤1 req/s
+    if wait > 0:
+        time.sleep(wait)
+    qs = urllib.parse.urlencode({
+        "q": q, "format": "jsonv2", "countrycodes": "au", "limit": "5",
+        "viewbox": GEOCODE_VIEWBOX, "bounded": "0", "addressdetails": "0"})
+    req = urllib.request.Request(f"{NOMINATIM}?{qs}",
+                                 headers={"User-Agent": GEOCODE_UA})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        rows = json.loads(r.read())
+    _geocode_last[0] = time.time()
+    out = [{"name": row.get("display_name"),
+            "lat": float(row["lat"]), "lon": float(row["lon"])}
+           for row in rows]
+    body = json.dumps(out).encode()
+    _geocode_cache[key] = (time.time(), body)
+    return body
 
 
 # --- transit (GTFS-realtime) -------------------------------------------------
@@ -516,6 +555,22 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception:
                 self.send_error(502, "rfs unreachable")
+            return
+        if self.path.startswith("/geocode"):
+            q = urllib.parse.parse_qs(
+                urllib.parse.urlparse(self.path).query).get("q", [""])[0]
+            if not q.strip():
+                self.send_error(400, "missing q")
+                return
+            try:
+                body = geocode_body(q)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "geocoder unreachable")
             return
         if self.path.rstrip("/") == "/bom":
             try:

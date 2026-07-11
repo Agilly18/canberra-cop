@@ -42,6 +42,9 @@ cheap: every data source is free.
   ranked by severity. No key needed.
 - **Local news** — RiotACT and Canberra Times headlines, merged and
   time-sorted in the sidebar.
+- **Address search** — type an address to geocode it (via
+  [Nominatim](https://nominatim.openstreetmap.org), biased to the Canberra
+  region) and fly the map to it with a marker.
 - **Basemaps** — dark (CARTO), street (OSM), or satellite (Esri imagery).
 
 ## Running it
@@ -73,8 +76,8 @@ Aircraft data from airplanes.live community receivers. Weather by Open-Meteo
 Agency (CC-BY 4.0) and © State of New South Wales (NSW Rural Fire Service).
 Outage data © Evoenergy and © Essential Energy, relayed from their public
 outage maps. Transit vehicle positions sourced from Transport Canberra.
-Weather warnings © Bureau of Meteorology. Base map © OpenStreetMap
-contributors, © CARTO.
+Weather warnings © Bureau of Meteorology. Geocoding © OpenStreetMap
+contributors via Nominatim. Base map © OpenStreetMap contributors, © CARTO.
 
 Incident data can affect life and property decisions — treat this as a hobby
 visualisation, not an emergency information service. Use official sources

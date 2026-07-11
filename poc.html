@@ -33,6 +33,17 @@
   #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
   #dot.ok { background: var(--green); } #dot.err { background: var(--red); }
 
+  #addr-search { width: 100%; box-sizing: border-box; margin-bottom: 6px;
+    background: #1a1b2680; border: 1px solid var(--dim); border-radius: 4px;
+    color: var(--fg); font-family: monospace; font-size: 13px; padding: 6px 8px; }
+  #addr-search::placeholder { color: var(--dim); }
+  #addr-search:focus { outline: none; border-color: var(--cyan); }
+  #addr-results { margin-bottom: 4px; }
+  #addr-results .sr { padding: 4px 6px; border-radius: 4px; cursor: pointer;
+    font-size: 11px; line-height: 1.35; border-bottom: 1px solid #ffffff10; }
+  #addr-results .sr:hover { background: #414868; }
+  #addr-results .sr-msg { color: var(--dim); font-size: 11px; padding: 2px 6px; }
+
   #bomwarn { margin-top: 8px; display: none; }
   #bomwarn.has-warn { display: block; }
   #bomwarn .bw { border-left: 3px solid var(--dim); padding: 3px 8px;
@@ -68,6 +79,9 @@
 <div id="panel">
   <h1>CANBERRA COP</h1>
   <div class="sub">proof of concept · all-source</div>
+
+  <input id="addr-search" type="text" placeholder="search address…" autocomplete="off">
+  <div id="addr-results"></div>
 
   <div class="row"><span class="k">temp / feels</span><span id="wx-temp">—</span></div>
   <div class="row"><span class="k">wind</span><span id="wx-wind">—</span></div>
@@ -502,6 +516,43 @@ document.getElementById('tog-power').onchange = e => {
   for (const id of ['power', 'power-area'])
     map.setLayoutProperty(id, 'visibility', e.target.checked ? 'visible' : 'none');
 };
+// Address search: geocode via serve.py (Nominatim relay), then fly to the
+// pick and drop a marker. Enter submits; results list is clickable.
+let searchMarker = null;
+const addrInput = document.getElementById('addr-search');
+const addrResults = document.getElementById('addr-results');
+addrInput.addEventListener('keydown', async e => {
+  if (e.key !== 'Enter') return;
+  const q = addrInput.value.trim();
+  if (!q) return;
+  addrResults.innerHTML = '<div class="sr-msg">searching…</div>';
+  try {
+    const r = await fetch('geocode?q=' + encodeURIComponent(q));
+    if (!r.ok) throw new Error(r.status);
+    const hits = await r.json();
+    if (!hits.length) {
+      addrResults.innerHTML = '<div class="sr-msg">no matches near Canberra</div>';
+      return;
+    }
+    addrResults.innerHTML = hits.map((h, i) =>
+      `<div class="sr" data-i="${i}">${h.name}</div>`).join('');
+    addrResults.querySelectorAll('.sr').forEach(el =>
+      el.onclick = () => pickAddress(hits[+el.dataset.i]));
+  } catch (err) {
+    addrResults.innerHTML = '<div class="sr-msg">search unavailable (needs serve.py)</div>';
+  }
+});
+function pickAddress(h) {
+  if (searchMarker) searchMarker.remove();
+  searchMarker = new maplibregl.Marker({ color: '#7dcfff' })
+    .setLngLat([h.lon, h.lat])
+    .setPopup(new maplibregl.Popup({ offset: 24 }).setHTML(`📍 ${h.name}`))
+    .addTo(map);
+  searchMarker.togglePopup();
+  map.flyTo({ center: [h.lon, h.lat], zoom: 15 });
+  addrResults.innerHTML = '';
+}
+
 document.getElementById('tog-transit').onchange = e => {
   for (const id of ['transit', 'transit-label'])
     map.setLayoutProperty(id, 'visibility', e.target.checked ? 'visible' : 'none');

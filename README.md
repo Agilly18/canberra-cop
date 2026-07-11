@@ -19,6 +19,10 @@ cheap: every data source is free.
   green/amber/red road congestion. Needs a free API key in `.env`
   (`TOMTOM_API_KEY=...`); the layer is off by default and simply stays
   unavailable without one.
+- **Fire hotspots** ([NASA FIRMS](https://firms.modaps.eosdis.nasa.gov),
+  optional) — VIIRS satellite thermal detections from the last 48 h, sized
+  by fire radiative power. Needs a free map key in `.env`
+  (`FIRMS_MAP_KEY=...`).
 
 ## Running it
 
@@ -36,7 +40,7 @@ server relays it.)
 ## Roadmap
 
 - **Phase 2** — proper backend (FastAPI container), Transport Canberra
-  GTFS-realtime (live buses/light rail), NASA FIRMS fire hotspots.
+  GTFS-realtime (live buses/light rail).
 - **Phase 3** — alert rules (loitering aircraft, incidents near a watchpoint,
   storm cells inbound), per-decision saved views, time slider.
 - **Someday** — a local RTL-SDR receiver as a first-party ADS-B sensor.

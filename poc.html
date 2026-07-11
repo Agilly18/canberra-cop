@@ -61,6 +61,7 @@
   <label><input type="checkbox" id="tog-radar" checked> rain radar</label>
   <label><input type="checkbox" id="tog-esa" checked> esa incidents <span id="esa-count" style="color:var(--dim)"></span></label>
   <label><input type="checkbox" id="tog-traffic"> traffic flow <span id="traffic-note" style="color:var(--dim)"></span></label>
+  <label><input type="checkbox" id="tog-fires" checked> fire hotspots <span id="fires-count" style="color:var(--dim)"></span></label>
   <div class="legend"><b class="lo">▲ &lt;10k ft</b><b class="hi">▲ ≥10k ft</b><b class="ml">▲ military</b></div>
   <div id="aclist"></div>
   <div id="status"><div id="dot"></div><span id="status-text">connecting…</span></div>
@@ -163,10 +164,37 @@ map.on('load', () => {
   map.on('mouseenter', 'esa', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'esa', () => map.getCanvas().style.cursor = '');
 
+  map.addSource('fires', { type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'fires', type: 'circle', source: 'fires',
+    paint: {
+      // radius scales with fire radiative power (MW): burns ~4, big fires 100+
+      'circle-radius': ['interpolate', ['linear'], ['get', 'frp'],
+        0, 5, 50, 12, 300, 22],
+      'circle-color': '#ff9e64',
+      'circle-opacity': 0.5,
+      'circle-stroke-width': 2,
+      'circle-stroke-color': '#f7768e'
+    }
+  }, 'esa');
+  map.on('click', 'fires', e => {
+    const p = e.features[0].properties;
+    new maplibregl.Popup({ offset: 12 })
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<b>satellite hotspot</b><br>detected: ${p.date} ${p.time} UTC<br>
+        satellite: ${p.satellite} (${p.daynight === 'D' ? 'day' : 'night'} pass)<br>
+        fire power: ${p.frp} MW`)
+      .addTo(map);
+  });
+  map.on('mouseenter', 'fires', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'fires', () => map.getCanvas().style.cursor = '');
+
   fetchAircraft();  setInterval(fetchAircraft, 12000);
   fetchRadar();     setInterval(fetchRadar, 5 * 60000);
   fetchWeather();   setInterval(fetchWeather, 10 * 60000);
   fetchIncidents(); setInterval(fetchIncidents, 60000);
+  fetchFires();     setInterval(fetchFires, 10 * 60000);
 });
 
 function setStatus(ok, text) {
@@ -293,6 +321,21 @@ document.getElementById('tog-radar').onchange = e =>
   map.setLayoutProperty('radar', 'visibility', e.target.checked ? 'visible' : 'none');
 document.getElementById('tog-esa').onchange = e =>
   map.setLayoutProperty('esa', 'visibility', e.target.checked ? 'visible' : 'none');
+document.getElementById('tog-fires').onchange = e =>
+  map.setLayoutProperty('fires', 'visibility', e.target.checked ? 'visible' : 'none');
+
+async function fetchFires() {
+  const count = document.getElementById('fires-count');
+  try {
+    const r = await fetch('firms');
+    if (!r.ok) throw new Error(r.status);
+    const geo = await r.json();
+    map.getSource('fires').setData(geo);
+    count.textContent = `(${geo.features.length})`;
+  } catch (e) {
+    count.textContent = '(needs serve.py)';
+  }
+}
 
 // Traffic tiles cost API quota, so the layer is off by default and only
 // created on first toggle. Key stays in serve.py; page never sees it.

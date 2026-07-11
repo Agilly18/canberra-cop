@@ -5,8 +5,12 @@ Serves the static page and relays two feeds a browser can't reach directly:
 - /esa — ACT ESA incidents (upstream sends no CORS headers)
 - /tomtom/{z}/{x}/{y}.png — TomTom traffic-flow tiles (keeps the API key
   out of the page source; key lives in the gitignored .env file)
+- /firms — NASA FIRMS fire hotspots near Canberra as GeoJSON (CSV upstream,
+  key also in .env)
 Run:  python3 serve.py  →  http://localhost:8899
 """
+import csv
+import io
 import json
 import os
 import re
@@ -35,7 +39,45 @@ def load_env():
     return env
 
 
-TOMTOM_KEY = load_env().get("TOMTOM_API_KEY", "")
+_env = load_env()
+TOMTOM_KEY = _env.get("TOMTOM_API_KEY", "")
+FIRMS_KEY = _env.get("FIRMS_MAP_KEY", "")
+
+# west,south,east,north box around the ACT and surrounds
+FIRMS_BBOX = "148.2,-36.2,150.0,-34.4"
+FIRMS_SENSORS = ("VIIRS_SNPP_NRT", "VIIRS_NOAA20_NRT")
+FIRMS_DAYS = 2
+FIRMS_CACHE_SECONDS = 600  # satellites only pass a few times a day
+
+_firms_cache = {"time": 0.0, "body": b""}
+
+
+def firms_body():
+    if time.time() - _firms_cache["time"] > FIRMS_CACHE_SECONDS:
+        feats = []
+        for sensor in FIRMS_SENSORS:
+            url = (f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/"
+                   f"{FIRMS_KEY}/{sensor}/{FIRMS_BBOX}/{FIRMS_DAYS}")
+            with urllib.request.urlopen(url, timeout=15) as r:
+                text = r.read().decode()
+            for row in csv.DictReader(io.StringIO(text)):
+                feats.append({
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates":
+                                 [float(row["longitude"]), float(row["latitude"])]},
+                    "properties": {
+                        "date": row["acq_date"],
+                        "time": row["acq_time"].zfill(4),
+                        "satellite": row["satellite"],
+                        "frp": float(row["frp"] or 0),
+                        "daynight": row["daynight"],
+                        "confidence": row["confidence"],
+                    },
+                })
+        body = json.dumps({"type": "FeatureCollection",
+                           "features": feats}).encode()
+        _firms_cache.update(time=time.time(), body=body)
+    return _firms_cache["body"]
 
 
 def esa_body():
@@ -77,6 +119,20 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception:
                 self.send_error(502, "tomtom unreachable")
+            return
+        if self.path.rstrip("/") == "/firms":
+            if not FIRMS_KEY:
+                self.send_error(503, "no FIRMS_MAP_KEY in .env")
+                return
+            try:
+                body = firms_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "firms unreachable")
             return
         if self.path.rstrip("/") == "/esa":
             try:

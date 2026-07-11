@@ -32,7 +32,12 @@
   #dot { width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
   #dot.ok { background: var(--green); } #dot.err { background: var(--red); }
 
-  #aclist { max-height: 220px; overflow-y: auto; margin-top: 4px; }
+  #aclist { max-height: 160px; overflow-y: auto; margin-top: 4px; }
+  #newslist { max-height: 150px; overflow-y: auto; margin-top: 4px; }
+  #newslist a { display: block; color: var(--fg); text-decoration: none;
+    padding: 2px 4px; border-radius: 4px; }
+  #newslist a:hover { background: #414868; }
+  #newslist .src { color: var(--dim); font-size: 10px; }
   #aclist .ac { display: grid; grid-template-columns: 70px 46px 1fr;
     gap: 6px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
   #aclist .ac:hover { background: #414868; }
@@ -71,6 +76,9 @@
   <label><input type="checkbox" id="tog-rfs" checked> nsw rfs <span id="rfs-count" style="color:var(--dim)"></span></label>
   <div class="legend"><b class="lo">▲ &lt;10k ft</b><b class="hi">▲ ≥10k ft</b><b class="ml">▲ military</b></div>
   <div id="aclist"></div>
+  <hr>
+  <div class="row"><span class="k">canberra news</span><span id="news-note" style="color:var(--dim)"></span></div>
+  <div id="newslist"></div>
   <div id="status"><div id="dot"></div><span id="status-text">connecting…</span></div>
 </div>
 
@@ -246,6 +254,7 @@ map.on('load', () => {
   fetchIncidents(); setInterval(fetchIncidents, 60000);
   fetchFires();     setInterval(fetchFires, 10 * 60000);
   fetchRfs();       setInterval(fetchRfs, 60000);
+  fetchNews();      setInterval(fetchNews, 10 * 60000);
 });
 
 function setStatus(ok, text) {
@@ -433,6 +442,23 @@ async function fetchRfs() {
   } catch (e) {
     count.textContent = '(needs serve.py)';
   }
+}
+
+async function fetchNews() {
+  const note = document.getElementById('news-note');
+  try {
+    const r = await fetch('news');
+    if (!r.ok) throw new Error(r.status);
+    const items = await r.json();
+    const ago = ts => {
+      const m = Math.round((Date.now() / 1000 - ts) / 60);
+      return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`;
+    };
+    document.getElementById('newslist').innerHTML = items.map(i =>
+      `<a href="${i.link}" target="_blank" rel="noopener">${i.title}
+       <span class="src">— ${i.source}, ${ago(i.ts)} ago</span></a>`).join('');
+    note.textContent = '';
+  } catch (e) { note.textContent = '(needs serve.py)'; }
 }
 
 // Traffic tiles cost API quota, so the layer is off by default and only

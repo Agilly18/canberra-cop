@@ -8,6 +8,7 @@ Serves the static page and relays two feeds a browser can't reach directly:
 - /firms — NASA FIRMS fire hotspots near Canberra as GeoJSON (CSV upstream,
   key also in .env)
 - /rfs — NSW RFS major incidents (GeoJSON upstream, no CORS headers)
+- /news — Canberra headlines (RiotACT + Canberra Times RSS merged to JSON)
 Run:  python3 serve.py  →  http://localhost:8899
 """
 import csv
@@ -17,6 +18,8 @@ import os
 import re
 import time
 import urllib.request
+import xml.etree.ElementTree as ET
+from email.utils import parsedate_to_datetime
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
 ESA_FEED = "https://esa.act.gov.au/feeds/allincidents.json"
@@ -91,6 +94,38 @@ def esa_body():
     return _cache["body"]
 
 
+NEWS_FEEDS = (
+    ("RiotACT", "https://the-riotact.com/feed"),
+    ("Canberra Times", "https://www.canberratimes.com.au/rss.xml"),
+)
+NEWS_CACHE_SECONDS = 600
+_news_cache = {"time": 0.0, "body": b"[]"}
+
+
+def news_body():
+    if time.time() - _news_cache["time"] > NEWS_CACHE_SECONDS:
+        items = []
+        for source, url in NEWS_FEEDS:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "canberra-cop-poc"})
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    root = ET.fromstring(r.read())
+                for it in root.findall(".//item"):
+                    try:
+                        ts = parsedate_to_datetime(it.findtext("pubDate", "")).timestamp()
+                    except Exception:
+                        ts = 0
+                    items.append({"source": source, "ts": ts,
+                                  "title": (it.findtext("title") or "").strip(),
+                                  "link": (it.findtext("link") or "").strip()})
+            except Exception:
+                pass  # one dead feed shouldn't kill the panel
+        items.sort(key=lambda i: i["ts"], reverse=True)
+        _news_cache.update(time=time.time(),
+                           body=json.dumps(items[:12]).encode())
+    return _news_cache["body"]
+
+
 RFS_FEED = "https://www.rfs.nsw.gov.au/feeds/majorIncidents.json"
 _rfs_cache = {"time": 0.0, "body": b""}
 
@@ -135,6 +170,17 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception:
                 self.send_error(502, "tomtom unreachable")
+            return
+        if self.path.rstrip("/") == "/news":
+            try:
+                body = news_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "news feeds unreachable")
             return
         if self.path.rstrip("/") == "/rfs":
             try:

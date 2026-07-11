@@ -9,6 +9,9 @@ Serves the static page and relays two feeds a browser can't reach directly:
   key also in .env)
 - /rfs — NSW RFS major incidents (GeoJSON upstream, no CORS headers)
 - /news — Canberra headlines (RiotACT + Canberra Times RSS merged to JSON)
+- /power — electricity outages as GeoJSON: Evoenergy (ACT, scraped from the
+  outagesViewModel JSON embedded in their outage-map page) merged with
+  Essential Energy (NSW, public KML files behind their outage map)
 Run:  python3 serve.py  →  http://localhost:8899
 """
 import csv
@@ -126,6 +129,180 @@ def news_body():
     return _news_cache["body"]
 
 
+# --- power outages ---------------------------------------------------------
+EVO_PAGE = "https://www.evoenergy.com.au/Outages"
+EE_KML_CURRENT = "https://www.essentialenergy.com.au/Assets/kmz/current.kml"
+EE_KML_FUTURE = "https://www.essentialenergy.com.au/Assets/kmz/future.kml"
+# lon/lat box around the COP area — same box the client uses for RFS pins
+POWER_BBOX = (148.2, -36.5, 150.5, -34.2)
+# both utility sites reject the default urllib UA at the edge
+BROWSER_UA = ("Mozilla/5.0 (X11; Linux x86_64; rv:128.0) "
+              "Gecko/20100101 Firefox/128.0")
+POWER_CACHE_SECONDS = 120
+EE_FUTURE_CACHE_SECONDS = 1800  # ~3 MB, 900+ statewide records, slow-moving
+SCHEDULED_HORIZON_DAYS = 7  # utilities plan weeks out; only show the next week
+
+_power_cache = {"time": 0.0, "body": b""}
+_ee_future_cache = {"time": 0.0, "feats": None}
+
+
+def _http_get(url, timeout=15):
+    req = urllib.request.Request(url, headers={"User-Agent": BROWSER_UA})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
+
+def _beyond_horizon(day, month, year):
+    from datetime import date, timedelta
+    try:
+        start = date(int(year), int(month), int(day))
+    except ValueError:
+        return False
+    return start > date.today() + timedelta(days=SCHEDULED_HORIZON_DAYS)
+
+
+def _fmt_evo(s):
+    # "2026-07-11T15:00:00" → "11/07 15:00"
+    m = re.match(r"(\d{4})-(\d\d)-(\d\d)T(\d\d:\d\d)", s or "")
+    return f"{m.group(3)}/{m.group(2)} {m.group(4)}" if m else "?"
+
+
+def _fmt_ee(s):
+    # "11/07/2026 15:00:00" → "11/07 15:00"
+    m = re.match(r"(\d\d)/(\d\d)/\d{4} (\d\d:\d\d)", s or "")
+    return f"{m.group(1)}/{m.group(2)} {m.group(3)}" if m else "?"
+
+
+def _outage_features(props, centroid, ring):
+    """One pin feature at the centroid + one polygon feature if we have a
+    ring; both carry the same properties so popups work either way."""
+    feats = [{"type": "Feature",
+              "geometry": {"type": "Point", "coordinates": centroid},
+              "properties": props}]
+    if ring and len(ring) >= 3:
+        if ring[0] != ring[-1]:
+            ring = ring + [ring[0]]
+        feats.append({"type": "Feature",
+                      "geometry": {"type": "Polygon", "coordinates": [ring]},
+                      "properties": props})
+    return feats
+
+
+def _evo_features():
+    """The Evoenergy outage map is server-rendered: the page HTML embeds the
+    full outage list (with polygons + centroids) as `outagesViewModel = [...]`.
+    No separate JSON endpoint exists, so scrape that assignment."""
+    html = _http_get(EVO_PAGE).decode("utf-8", "replace")
+    m = re.search(r"outagesViewModel\s*=\s*(\[.*?\]);", html, re.S)
+    if not m:
+        return []
+    feats = []
+    for o in json.loads(m.group(1)):
+        status = (o.get("Status") or "").lower()
+        otype = (o.get("Type") or "").lower()
+        if status not in ("active", "scheduled"):
+            continue  # cancelled / completed / restored = noise
+        centroid = json.loads(o.get("PolygonCentroidCoordinate") or "null")
+        if not centroid:
+            continue
+        sev = ("unplanned" if otype == "unplanned" else
+               "planned-active" if status == "active" else "scheduled")
+        sched = o.get("ScheduledStartDateTime") or ""
+        if sev == "scheduled" and len(sched) >= 10 and _beyond_horizon(
+                sched[8:10], sched[5:7], sched[0:4]):
+            continue
+        props = {
+            "src": "Evoenergy", "id": o.get("OutageID", "?"),
+            "otype": otype, "sev": sev,
+            "customers": o.get("AffectedCustomersCount") or 0,
+            "where": (o.get("AffectedSuburbs") or "").title(),
+            "reason": o.get("Description") or "",
+            "start": _fmt_evo(o.get("ActualStartDateTime")
+                              or o.get("ScheduledStartDateTime")),
+            "eta": _fmt_evo(o.get("ExpectedRestorationDateTime")
+                            or o.get("ScheduledEndDateTime")),
+        }
+        ring = [[p["lng"], p["lat"]]
+                for p in json.loads(o.get("PolygonCoordinates") or "[]")]
+        feats.extend(_outage_features(
+            props, [centroid["lng"], centroid["lat"]], ring))
+    return feats
+
+
+def _ee_parse(kml_bytes, sev_default):
+    """Essential Energy KML → outage features inside POWER_BBOX. Placemarks
+    carry the details as an HTML blob in <description>; planned/unplanned is
+    only encoded in the styleUrl name."""
+    ns = "{http://earth.google.com/kml/2.1}"
+    w, s, e, n = POWER_BBOX
+    feats = []
+    for pm in ET.fromstring(kml_bytes).iter(ns + "Placemark"):
+        pt = pm.find(f".//{ns}Point/{ns}coordinates")
+        ring_el = pm.find(f".//{ns}Polygon//{ns}coordinates")
+        ring = []
+        if ring_el is not None and ring_el.text:
+            ring = [[float(x) for x in pair.split(",")[:2]]
+                    for pair in ring_el.text.split()]
+        if pt is not None and pt.text:
+            lon, lat = [float(x) for x in pt.text.strip().split(",")[:2]]
+        elif ring:
+            lon = sum(p[0] for p in ring) / len(ring)
+            lat = sum(p[1] for p in ring) / len(ring)
+        else:
+            continue
+        if not (w < lon < e and s < lat < n):
+            continue
+        desc = pm.findtext(f"{ns}description", "")
+        kv = {k.strip().rstrip(":").lower(): v.strip() for k, v in
+              re.findall(r"<span>([^<]+)</span>([^<]*)", desc)}
+        oid = pm.get("id") or (re.search(r"<h2>([^<]+)</h2>", desc) or
+                               [None, "?"])[1]
+        style = pm.findtext(f"{ns}styleUrl", "")
+        otype = "unplanned" if "unplanned" in style else "planned"
+        sev = "unplanned" if otype == "unplanned" else sev_default
+        m = re.match(r"(\d\d)/(\d\d)/(\d{4})", kv.get("time off", ""))
+        if sev == "scheduled" and m and _beyond_horizon(*m.groups()):
+            continue
+        feats.extend(_outage_features({
+            "src": "Essential Energy", "id": oid,
+            "otype": otype, "sev": sev,
+            "customers": int(kv.get("no. of customers affected") or 0),
+            "where": "",
+            "reason": kv.get("reason", ""),
+            "start": _fmt_ee(kv.get("time off")),
+            "eta": _fmt_ee(kv.get("est. time on")),
+        }, [lon, lat], ring))
+    return feats
+
+
+def power_body():
+    if time.time() - _power_cache["time"] > POWER_CACHE_SECONDS:
+        feats = []
+        for fetch in (_evo_features, _ee_current_features, _ee_future_features):
+            try:
+                feats.extend(fetch())
+            except Exception:
+                pass  # one utility down shouldn't blank the other
+        _power_cache.update(time=time.time(), body=json.dumps(
+            {"type": "FeatureCollection", "features": feats}).encode())
+    return _power_cache["body"]
+
+
+def _ee_current_features():
+    # their own map JS cache-busts with a random query string; do the same
+    return _ee_parse(_http_get(f"{EE_KML_CURRENT}?{int(time.time())}"),
+                     "planned-active")
+
+
+def _ee_future_features():
+    if (_ee_future_cache["feats"] is None or
+            time.time() - _ee_future_cache["time"] > EE_FUTURE_CACHE_SECONDS):
+        feats = _ee_parse(_http_get(f"{EE_KML_FUTURE}?{int(time.time())}"),
+                          "scheduled")
+        _ee_future_cache.update(time=time.time(), feats=feats)
+    return _ee_future_cache["feats"]
+
+
 RFS_FEED = "https://www.rfs.nsw.gov.au/feeds/majorIncidents.json"
 _rfs_cache = {"time": 0.0, "body": b""}
 
@@ -192,6 +369,17 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception:
                 self.send_error(502, "rfs unreachable")
+            return
+        if self.path.rstrip("/") == "/power":
+            try:
+                body = power_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "outage feeds unreachable")
             return
         if self.path.rstrip("/") == "/firms":
             if not FIRMS_KEY:

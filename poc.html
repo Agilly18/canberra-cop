@@ -74,6 +74,7 @@
   <label><input type="checkbox" id="tog-traffic"> traffic flow <span id="traffic-note" style="color:var(--dim)"></span></label>
   <label><input type="checkbox" id="tog-fires" checked> fire hotspots <span id="fires-count" style="color:var(--dim)"></span></label>
   <label><input type="checkbox" id="tog-rfs" checked> nsw rfs <span id="rfs-count" style="color:var(--dim)"></span></label>
+  <label><input type="checkbox" id="tog-power" checked> power outages <span id="power-count" style="color:var(--dim)"></span></label>
   <div class="legend"><b class="lo">▲ &lt;10k ft</b><b class="hi">▲ ≥10k ft</b><b class="ml">▲ military</b></div>
   <div id="aclist"></div>
   <hr>
@@ -100,7 +101,7 @@ const map = new maplibregl.Map({
       carto: {
         type: 'raster', tileSize: 256,
         tiles: ['https://basemaps.cartocdn.com/dark_all/{z}/{x}/{y}.png'],
-        attribution: '© OpenStreetMap © CARTO · aircraft: airplanes.live · wx: Open-Meteo · radar: RainViewer'
+        attribution: '© OpenStreetMap © CARTO · aircraft: airplanes.live · wx: Open-Meteo · radar: RainViewer · outages: Evoenergy / Essential Energy'
       },
       osm: {
         type: 'raster', tileSize: 256,
@@ -248,12 +249,52 @@ map.on('load', () => {
   map.on('mouseenter', 'rfs', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'rfs', () => map.getCanvas().style.cursor = '');
 
+  // Power outages: hollow dots (dark fill, coloured ring) so they read
+  // differently from the solid ESA/RFS incident pins; outage footprint
+  // polygons sit under everything as a faint wash.
+  const sevColour = ['match', ['get', 'sev'],
+    'unplanned', '#f7768e', 'planned-active', '#e0af68', '#565f89'];
+  map.addSource('power', { type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'power-area', type: 'fill', source: 'power',
+    filter: ['==', ['geometry-type'], 'Polygon'],
+    paint: { 'fill-color': sevColour, 'fill-opacity': 0.15,
+      'fill-outline-color': sevColour }
+  }, 'esa');
+  map.addLayer({
+    id: 'power', type: 'circle', source: 'power',
+    filter: ['==', ['geometry-type'], 'Point'],
+    paint: {
+      'circle-radius': 5.5,
+      'circle-color': '#1a1b26',
+      'circle-opacity': 0.85,
+      'circle-stroke-width': 2.5,
+      'circle-stroke-color': sevColour
+    }
+  }, 'esa');
+  map.on('click', 'power', e => {
+    const p = e.features[0].properties;
+    new maplibregl.Popup({ offset: 12 })
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<b>${p.id}</b> (${p.src})<br>
+        ${p.otype} outage${p.sev === 'scheduled' ? ' (scheduled)' : ''}<br>
+        customers: ${p.customers}<br>
+        ${p.where ? 'where: ' + p.where + '<br>' : ''}
+        ${p.reason ? 'reason: ' + p.reason + '<br>' : ''}
+        off: ${p.start}<br>est. back: ${p.eta}`)
+      .addTo(map);
+  });
+  map.on('mouseenter', 'power', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'power', () => map.getCanvas().style.cursor = '');
+
   fetchAircraft();  setInterval(fetchAircraft, 12000);
   fetchRadar();     setInterval(fetchRadar, 5 * 60000);
   fetchWeather();   setInterval(fetchWeather, 10 * 60000);
   fetchIncidents(); setInterval(fetchIncidents, 60000);
   fetchFires();     setInterval(fetchFires, 10 * 60000);
   fetchRfs();       setInterval(fetchRfs, 60000);
+  fetchPower();     setInterval(fetchPower, 120000);
   fetchNews();      setInterval(fetchNews, 10 * 60000);
 });
 
@@ -392,6 +433,10 @@ document.getElementById('tog-fires').onchange = e =>
   map.setLayoutProperty('fires', 'visibility', e.target.checked ? 'visible' : 'none');
 document.getElementById('tog-rfs').onchange = e =>
   map.setLayoutProperty('rfs', 'visibility', e.target.checked ? 'visible' : 'none');
+document.getElementById('tog-power').onchange = e => {
+  for (const id of ['power', 'power-area'])
+    map.setLayoutProperty(id, 'visibility', e.target.checked ? 'visible' : 'none');
+};
 
 async function fetchFires() {
   const count = document.getElementById('fires-count');
@@ -439,6 +484,22 @@ async function fetchRfs() {
         f.geometry.coordinates[1] > -36.5 && f.geometry.coordinates[1] < -34.2);
     map.getSource('rfs').setData({ type: 'FeatureCollection', features: feats });
     count.textContent = `(${feats.length})`;
+  } catch (e) {
+    count.textContent = '(needs serve.py)';
+  }
+}
+
+async function fetchPower() {
+  const count = document.getElementById('power-count');
+  try {
+    const r = await fetch('power');
+    if (!r.ok) throw new Error(r.status);
+    const geo = await r.json();
+    map.getSource('power').setData(geo);
+    // one pin per outage (polygons are duplicates of the same outage)
+    const pins = geo.features.filter(f => f.geometry.type === 'Point');
+    const live = pins.filter(f => f.properties.sev !== 'scheduled').length;
+    count.textContent = `(${live} live / ${pins.length - live} sched)`;
   } catch (e) {
     count.textContent = '(needs serve.py)';
   }

@@ -26,6 +26,11 @@ cheap: every data source is free.
 - **NSW fires** — [NSW RFS](https://www.rfs.nsw.gov.au) major incidents
   around the ACT border region, coloured by official alert level (the
   "Fires Near Me" feed).
+- **Power outages** — [Evoenergy](https://www.evoenergy.com.au/Outages) (ACT)
+  and [Essential Energy](https://www.essentialenergy.com.au) (surrounding NSW)
+  current outages plus works scheduled in the next 7 days: outage-footprint
+  polygons and pins coloured by severity (unplanned / active planned /
+  scheduled).
 - **Local news** — RiotACT and Canberra Times headlines, merged and
   time-sorted in the sidebar.
 - **Basemaps** — dark (CARTO), street (OSM), or satellite (Esri imagery).
@@ -57,7 +62,8 @@ server relays it.)
 Aircraft data from airplanes.live community receivers. Weather by Open-Meteo
 (CC-BY 4.0). Radar tiles by RainViewer. Incident data © ACT Emergency Services
 Agency (CC-BY 4.0) and © State of New South Wales (NSW Rural Fire Service).
-Base map © OpenStreetMap contributors, © CARTO.
+Outage data © Evoenergy and © Essential Energy, relayed from their public
+outage maps. Base map © OpenStreetMap contributors, © CARTO.
 
 Incident data can affect life and property decisions — treat this as a hobby
 visualisation, not an emergency information service. Use official sources

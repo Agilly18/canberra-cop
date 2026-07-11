@@ -47,12 +47,22 @@
   #bomwarn { margin-top: 8px; display: none; }
   #bomwarn.has-warn { display: block; }
   #bomwarn .bw { border-left: 3px solid var(--dim); padding: 3px 8px;
-    margin: 4px 0; border-radius: 0 4px 4px 0; background: #ffffff08; }
+    margin: 4px 0; border-radius: 0 4px 4px 0; background: #ffffff08;
+    cursor: pointer; }
+  #bomwarn .bw:hover { background: #ffffff14; }
   #bomwarn .bw.major { border-left-color: var(--red); }
   #bomwarn .bw.moderate { border-left-color: var(--amber); }
   #bomwarn .bw.minor { border-left-color: var(--cyan); }
   #bomwarn .bw .bt { display: block; }
+  #bomwarn .bw .bt::before { content: '▸ '; color: var(--dim); }
+  #bomwarn .bw.open .bt::before { content: '▾ '; }
   #bomwarn .bw .bm { color: var(--dim); font-size: 11px; }
+  #bomwarn .bd { display: none; margin-top: 6px; font-size: 11px;
+    line-height: 1.4; max-height: 240px; overflow-y: auto; }
+  #bomwarn .bw.open .bd { display: block; }
+  #bomwarn .bd h2 { font-size: 12px; margin: 4px 0; color: var(--fg); }
+  #bomwarn .bd p { margin: 4px 0; }
+  #bomwarn .bd .p-id, #bomwarn .bd .source, #bomwarn .bd .dt { color: var(--dim); }
 
   #aclist { max-height: 200px; overflow-y: auto; margin-top: 4px; }
   #newslist { max-height: 190px; overflow-y: auto; margin-top: 4px; }
@@ -651,14 +661,34 @@ async function fetchBom() {
     box.innerHTML = warns.map(w => {
       const t = w.expires ? new Date(w.expires) : null;
       const till = t ? `until ${t.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '';
-      return `<div class="bw ${w.severity || ''}">
+      return `<div class="bw ${w.severity || ''}" data-id="${w.id}">
         <span class="bt">⚠ ${w.short || w.title}</span>
         <span class="bm">${w.title !== w.short ? w.title + ' · ' : ''}${till}</span>
+        <div class="bd"></div>
       </div>`;
     }).join('');
+    box.querySelectorAll('.bw').forEach(el => el.onclick = () => toggleBom(el));
   } catch (e) {
     box.className = '';
     box.innerHTML = '';
+  }
+}
+
+// Expand a warning to its full BOM text, lazy-loaded on first open.
+async function toggleBom(el) {
+  const bd = el.querySelector('.bd');
+  if (el.classList.contains('open')) { el.classList.remove('open'); return; }
+  el.classList.add('open');
+  if (bd.dataset.loaded) return;
+  bd.innerHTML = '<span class="bm">loading…</span>';
+  try {
+    const r = await fetch('bomdetail?id=' + encodeURIComponent(el.dataset.id));
+    if (!r.ok) throw new Error(r.status);
+    const d = await r.json();
+    bd.innerHTML = d.message || '<span class="bm">no detail available</span>';
+    bd.dataset.loaded = '1';
+  } catch (e) {
+    bd.innerHTML = '<span class="bm">detail unavailable</span>';
   }
 }
 

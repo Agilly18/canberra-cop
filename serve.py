@@ -471,6 +471,28 @@ BOM_CACHE_SECONDS = 300
 _bom_cache = {"time": 0.0, "body": b"[]"}
 
 
+_bom_detail_cache = {}
+
+
+def bom_detail_body(wid):
+    # warning ids are like NSW_PW017_IDN29000 — restrict chars so this can't
+    # be coerced into requesting an arbitrary upstream path
+    if not re.fullmatch(r"[A-Za-z0-9_]+", wid):
+        raise ValueError("bad warning id")
+    hit = _bom_detail_cache.get(wid)
+    if hit and time.time() - hit[0] < BOM_CACHE_SECONDS:
+        return hit[1]
+    req = urllib.request.Request(
+        f"https://api.weather.bom.gov.au/v1/warnings/{wid}",
+        headers={"User-Agent": BROWSER_UA, "Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        d = json.loads(r.read()).get("data", {})
+    body = json.dumps({"message": d.get("message", ""),
+                       "title": d.get("title")}).encode()
+    _bom_detail_cache[wid] = (time.time(), body)
+    return body
+
+
 def bom_body():
     if time.time() - _bom_cache["time"] > BOM_CACHE_SECONDS:
         req = urllib.request.Request(BOM_WARN_URL, headers={
@@ -571,6 +593,21 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception:
                 self.send_error(502, "geocoder unreachable")
+            return
+        if self.path.startswith("/bomdetail"):
+            wid = urllib.parse.parse_qs(
+                urllib.parse.urlparse(self.path).query).get("id", [""])[0]
+            try:
+                body = bom_detail_body(wid)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except ValueError:
+                self.send_error(400, "bad id")
+            except Exception:
+                self.send_error(502, "BOM detail unreachable")
             return
         if self.path.rstrip("/") == "/bom":
             try:

@@ -23,6 +23,9 @@ cheap: every data source is free.
   optional) — VIIRS satellite thermal detections from the last 48 h, sized
   by fire radiative power. Needs a free map key in `.env`
   (`FIRMS_MAP_KEY=...`).
+- **NSW fires** — [NSW RFS](https://www.rfs.nsw.gov.au) major incidents
+  around the ACT border region, coloured by official alert level (the
+  "Fires Near Me" feed).
 
 ## Running it
 
@@ -49,7 +52,8 @@ server relays it.)
 
 Aircraft data from airplanes.live community receivers. Weather by Open-Meteo
 (CC-BY 4.0). Radar tiles by RainViewer. Incident data © ACT Emergency Services
-Agency (CC-BY 4.0). Base map © OpenStreetMap contributors, © CARTO.
+Agency (CC-BY 4.0) and © State of New South Wales (NSW Rural Fire Service).
+Base map © OpenStreetMap contributors, © CARTO.
 
 Incident data can affect life and property decisions — treat this as a hobby
 visualisation, not an emergency information service. Use official sources

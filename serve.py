@@ -7,6 +7,7 @@ Serves the static page and relays two feeds a browser can't reach directly:
   out of the page source; key lives in the gitignored .env file)
 - /firms — NASA FIRMS fire hotspots near Canberra as GeoJSON (CSV upstream,
   key also in .env)
+- /rfs — NSW RFS major incidents (GeoJSON upstream, no CORS headers)
 Run:  python3 serve.py  →  http://localhost:8899
 """
 import csv
@@ -90,6 +91,21 @@ def esa_body():
     return _cache["body"]
 
 
+RFS_FEED = "https://www.rfs.nsw.gov.au/feeds/majorIncidents.json"
+_rfs_cache = {"time": 0.0, "body": b""}
+
+
+def rfs_body():
+    # RFS asks consumers to poll no more often than every 60 s
+    if time.time() - _rfs_cache["time"] > 60:
+        req = urllib.request.Request(RFS_FEED, headers={"User-Agent": "canberra-cop-poc"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = r.read()
+        json.loads(body)  # refuse to cache junk
+        _rfs_cache.update(time=time.time(), body=body)
+    return _rfs_cache["body"]
+
+
 def tomtom_tile(z, x, y):
     key = f"{z}/{x}/{y}"
     hit = _tile_cache.get(key)
@@ -119,6 +135,17 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception:
                 self.send_error(502, "tomtom unreachable")
+            return
+        if self.path.rstrip("/") == "/rfs":
+            try:
+                body = rfs_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "rfs unreachable")
             return
         if self.path.rstrip("/") == "/firms":
             if not FIRMS_KEY:

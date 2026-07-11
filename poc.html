@@ -62,6 +62,7 @@
   <label><input type="checkbox" id="tog-esa" checked> esa incidents <span id="esa-count" style="color:var(--dim)"></span></label>
   <label><input type="checkbox" id="tog-traffic"> traffic flow <span id="traffic-note" style="color:var(--dim)"></span></label>
   <label><input type="checkbox" id="tog-fires" checked> fire hotspots <span id="fires-count" style="color:var(--dim)"></span></label>
+  <label><input type="checkbox" id="tog-rfs" checked> nsw rfs <span id="rfs-count" style="color:var(--dim)"></span></label>
   <div class="legend"><b class="lo">▲ &lt;10k ft</b><b class="hi">▲ ≥10k ft</b><b class="ml">▲ military</b></div>
   <div id="aclist"></div>
   <div id="status"><div id="dot"></div><span id="status-text">connecting…</span></div>
@@ -190,11 +191,38 @@ map.on('load', () => {
   map.on('mouseenter', 'fires', () => map.getCanvas().style.cursor = 'pointer');
   map.on('mouseleave', 'fires', () => map.getCanvas().style.cursor = '');
 
+  map.addSource('rfs', { type: 'geojson',
+    data: { type: 'FeatureCollection', features: [] } });
+  map.addLayer({
+    id: 'rfs', type: 'circle', source: 'rfs',
+    paint: {
+      'circle-radius': 7,
+      'circle-color': ['match', ['get', 'category'],
+        'Emergency Warning', '#f7768e', 'Watch and Act', '#e0af68',
+        'Advice', '#7dcfff', '#565f89'],
+      'circle-opacity': 0.85,
+      // white stroke = NSW RFS; dark stroke = ACT ESA
+      'circle-stroke-width': 1.5,
+      'circle-stroke-color': '#c0caf5'
+    }
+  });
+  map.on('click', 'rfs', e => {
+    const p = e.features[0].properties;
+    new maplibregl.Popup({ offset: 12 })
+      .setLngLat(e.features[0].geometry.coordinates)
+      .setHTML(`<b>${p.title}</b> (NSW RFS)<br>alert: ${p.category}<br>
+        status: ${p.status}<br>type: ${p.rfstype}<br>size: ${p.size}`)
+      .addTo(map);
+  });
+  map.on('mouseenter', 'rfs', () => map.getCanvas().style.cursor = 'pointer');
+  map.on('mouseleave', 'rfs', () => map.getCanvas().style.cursor = '');
+
   fetchAircraft();  setInterval(fetchAircraft, 12000);
   fetchRadar();     setInterval(fetchRadar, 5 * 60000);
   fetchWeather();   setInterval(fetchWeather, 10 * 60000);
   fetchIncidents(); setInterval(fetchIncidents, 60000);
   fetchFires();     setInterval(fetchFires, 10 * 60000);
+  fetchRfs();       setInterval(fetchRfs, 60000);
 });
 
 function setStatus(ok, text) {
@@ -323,6 +351,8 @@ document.getElementById('tog-esa').onchange = e =>
   map.setLayoutProperty('esa', 'visibility', e.target.checked ? 'visible' : 'none');
 document.getElementById('tog-fires').onchange = e =>
   map.setLayoutProperty('fires', 'visibility', e.target.checked ? 'visible' : 'none');
+document.getElementById('tog-rfs').onchange = e =>
+  map.setLayoutProperty('rfs', 'visibility', e.target.checked ? 'visible' : 'none');
 
 async function fetchFires() {
   const count = document.getElementById('fires-count');
@@ -332,6 +362,44 @@ async function fetchFires() {
     const geo = await r.json();
     map.getSource('fires').setData(geo);
     count.textContent = `(${geo.features.length})`;
+  } catch (e) {
+    count.textContent = '(needs serve.py)';
+  }
+}
+
+async function fetchRfs() {
+  const count = document.getElementById('rfs-count');
+  try {
+    const r = await fetch('rfs');
+    if (!r.ok) throw new Error(r.status);
+    const geo = await r.json();
+    const feats = geo.features
+      .map(f => {
+        // big fires ship a GeometryCollection (point + burnt-area polygon);
+        // keep just the point for pin display
+        const g = f.geometry.type === 'GeometryCollection'
+          ? f.geometry.geometries.find(g => g.type === 'Point')
+          : (f.geometry.type === 'Point' ? f.geometry : null);
+        if (!g) return null;
+        const kv = {};
+        (f.properties.description || '').split(/<br\s*\/?>/).forEach(line => {
+          const m = line.match(/^\s*([\w ]+):\s*(.+)$/s);
+          if (m) kv[m[1].trim().toLowerCase()] = m[2].trim();
+        });
+        return {
+          type: 'Feature', geometry: g,
+          properties: {
+            title: f.properties.title, category: f.properties.category,
+            status: kv.status || '?', rfstype: kv.type || '?',
+            size: kv.size || '?'
+          }
+        };
+      })
+      .filter(f => f && f.geometry.coordinates[0] > 148.2 &&
+        f.geometry.coordinates[0] < 150.5 &&
+        f.geometry.coordinates[1] > -36.5 && f.geometry.coordinates[1] < -34.2);
+    map.getSource('rfs').setData({ type: 'FeatureCollection', features: feats });
+    count.textContent = `(${feats.length})`;
   } catch (e) {
     count.textContent = '(needs serve.py)';
   }

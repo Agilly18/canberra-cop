@@ -29,7 +29,7 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
-from http.server import HTTPServer, SimpleHTTPRequestHandler
+from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
 
 ESA_FEED = "https://esa.act.gov.au/feeds/allincidents.json"
 CACHE_SECONDS = 60  # ESA updates every 60 s; don't hammer them harder
@@ -677,4 +677,5 @@ class Handler(SimpleHTTPRequestHandler):
 
 if __name__ == "__main__":
     print("Canberra COP PoC → http://localhost:8899/poc.html  (Ctrl-C to stop)")
-    HTTPServer(("0.0.0.0", 8899), Handler).serve_forever()
+    # Threading: one slow upstream fetch must not stall every other request
+    ThreadingHTTPServer(("0.0.0.0", 8899), Handler).serve_forever()

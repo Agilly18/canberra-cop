@@ -70,6 +70,15 @@
     padding: 2px 4px; border-radius: 4px; }
   #newslist a:hover { background: #414868; }
   #newslist .src { color: var(--dim); font-size: 11px; }
+  #feedlist { max-height: 230px; overflow-y: auto; margin-top: 4px; }
+  .fe { display: flex; gap: 7px; padding: 3px 6px; margin: 3px 0;
+    border-left: 3px solid var(--dim); border-radius: 0 4px 4px 0;
+    background: #ffffff08; cursor: pointer; font-size: 12px; line-height: 1.35; }
+  .fe:hover { background: #ffffff14; }
+  .fe .fe-m { color: var(--dim); font-size: 11px; }
+  .fe .fe-k { font-weight: bold; }
+  .fe.fresh { animation: fefresh 1.2s ease-out 4; }
+  @keyframes fefresh { 0% { background: #7dcfff44; } 100% { background: #ffffff08; } }
   #aclist .ac { display: grid; grid-template-columns: 70px 46px 1fr;
     gap: 6px; padding: 2px 4px; border-radius: 4px; cursor: pointer; }
   #aclist .ac:hover { background: #414868; }
@@ -114,6 +123,9 @@
   <label><input type="checkbox" id="tog-transit" checked> transit <span id="transit-count" style="color:var(--dim)"></span></label>
   <div class="legend"><b class="lo">▲ &lt;10k ft</b><b class="hi">▲ ≥10k ft</b><b class="ml">▲ military</b></div>
   <div id="aclist"></div>
+  <hr>
+  <div class="row"><span class="k">event feed</span><span id="feed-note" style="color:var(--dim)"></span></div>
+  <div id="feedlist"></div>
   <hr>
   <div class="row"><span class="k">canberra news</span><span id="news-note" style="color:var(--dim)"></span></div>
   <div id="newslist"></div>
@@ -180,12 +192,194 @@ function planeIcon(colour) {
   return g.getImageData(0, 0, 36, 36);
 }
 
-const state = { planes: [], radarFrame: null };
+const state = { planes: [], radarFrame: null, esaFeats: [] };
+
+// --- incident taxonomy: category from title keywords → colour + icon ---
+// planned burns get their own muted class so real fires stand out
+const CAT = {
+  crash:   { col: '#e0af68', emoji: '🚗', label: 'crash' },
+  fire:    { col: '#f7768e', emoji: '🔥', label: 'fire' },
+  burn:    { col: '#ff9e64', emoji: '🔥', label: 'planned burn' },
+  medical: { col: '#9ece6a', emoji: '🚑', label: 'medical' },
+  rescue:  { col: '#7dcfff', emoji: '⛑️', label: 'rescue' },
+  hazmat:  { col: '#bb9af7', emoji: '☣️', label: 'hazmat' },
+  storm:   { col: '#2ac3de', emoji: '🌩️', label: 'storm/ses' },
+  power:   { col: '#e0af68', emoji: '⚡', label: 'power' },
+  air:     { col: '#f7768e', emoji: '🚁', label: 'aircraft' },
+  other:   { col: '#565f89', emoji: '📍', label: 'other' }
+};
+function categorise(title) {
+  const t = (title || '').toUpperCase();
+  if (/HAZARD REDUCTION|PRESCRIBED|PILE BURN/.test(t)) return 'burn';
+  if (/MOTOR VEHICLE|MVA|COLLISION|CRASH|VEHICLE ACCIDENT/.test(t)) return 'crash';
+  if (/HAZMAT|CHEMICAL|GAS LEAK|FUEL|SPILL/.test(t)) return 'hazmat';
+  if (/RESCUE|TRAPPED|SEARCH/.test(t)) return 'rescue';
+  if (/AMBULANCE|MEDICAL/.test(t)) return 'medical';
+  if (/STORM|TREE DOWN|TREE |FLOOD|ROOF|SES/.test(t)) return 'storm';
+  if (/FIRE|SMOKE|ALARM|BURN/.test(t)) return 'fire';
+  return 'other';
+}
+
+// Category pin: coloured disc + dark glyph, same canvas technique as the
+// aircraft icons (map glyph fonts can't render emoji)
+function incidentIcon(cat, fill, stroke = '#1a1b26') {
+  const col = fill || CAT[cat].col;
+  const c = document.createElement('canvas'); c.width = c.height = 30;
+  const g = c.getContext('2d');
+  g.translate(15, 15);
+  g.beginPath(); g.arc(0, 0, 12, 0, 7);
+  g.fillStyle = col; g.fill();
+  g.lineWidth = 2; g.strokeStyle = stroke; g.stroke();
+  g.fillStyle = '#1a1b26';
+  g.beginPath();
+  switch (cat) {
+    case 'crash': // car: cabin + body + wheels
+      g.moveTo(-4, -2); g.lineTo(-3, -6); g.lineTo(3, -6); g.lineTo(5, -2);
+      g.closePath(); g.rect(-8, -2, 16, 5); g.fill();
+      g.beginPath(); g.arc(-4.5, 4.5, 2.2, 0, 7); g.arc(4.5, 4.5, 2.2, 0, 7);
+      g.fill();
+      break;
+    case 'fire': case 'burn': // flame
+      g.moveTo(0, -9); g.quadraticCurveTo(7, -2, 5, 4);
+      g.quadraticCurveTo(4, 8, 0, 9); g.quadraticCurveTo(-4, 8, -5, 4);
+      g.quadraticCurveTo(-7, -2, 0, -9); g.fill();
+      break;
+    case 'medical': // plus
+      g.rect(-2.5, -8, 5, 16); g.rect(-8, -2.5, 16, 5); g.fill();
+      break;
+    case 'rescue': // life ring
+      g.arc(0, 0, 7.5, 0, 7); g.arc(0, 0, 3.5, 0, 7, true); g.fill('evenodd');
+      break;
+    case 'hazmat': // exclamation
+      g.rect(-2, -9, 4, 11); g.fill();
+      g.beginPath(); g.arc(0, 6, 2.2, 0, 7); g.fill();
+      break;
+    case 'storm': // bolt
+      g.moveTo(2, -9); g.lineTo(-5, 1); g.lineTo(-1, 1); g.lineTo(-2, 9);
+      g.lineTo(5, -2); g.lineTo(1, -2); g.closePath(); g.fill();
+      break;
+    default:
+      g.arc(0, 0, 3.5, 0, 7); g.fill();
+  }
+  return g.getImageData(0, 0, 30, 30);
+}
+
+// --- event feed: diff each poll against known state, log what changed ---
+const feedState = {
+  events: JSON.parse(localStorage.getItem('copFeedEvents') || '[]'),
+  known: JSON.parse(localStorage.getItem('copFeedKnown') || '{}'),
+  loiterSeen: {}
+};
+function feedDiff(src, items) {
+  const prev = feedState.known[src];
+  const cur = {};
+  items.forEach(i => cur[i.id] = i);
+  feedState.known[src] = cur;
+  if (!prev) { saveFeed(); return; } // first sight of a source: seed silently
+  for (const [id, i] of Object.entries(cur)) {
+    if (!(id in prev)) feedEvent('new', src, i);
+    else if (prev[id].status !== i.status)
+      feedEvent('update', src, i, `${prev[id].status} → ${i.status}`);
+  }
+  for (const [id, i] of Object.entries(prev))
+    if (!(id in cur)) feedEvent('cleared', src, i);
+  saveFeed();
+}
+function feedEvent(kind, src, i, note) {
+  feedState.events.unshift({ t: Date.now(), kind, src, cat: i.cat,
+    title: i.title, detail: note || i.detail || '', lon: i.lon, lat: i.lat });
+  feedState.events = feedState.events.slice(0, 100);
+  renderFeed();
+}
+function saveFeed() {
+  localStorage.setItem('copFeedEvents', JSON.stringify(feedState.events));
+  localStorage.setItem('copFeedKnown', JSON.stringify(feedState.known));
+}
+const FEED_KIND = { new: ['NEW', 'var(--green)'], update: ['UPD', 'var(--amber)'],
+  cleared: ['CLR', 'var(--dim)'], loiter: ['AIR', 'var(--red)'] };
+function renderFeed() {
+  const ago = t => { const m = Math.round((Date.now() - t) / 60000);
+    return m < 1 ? 'now' : m < 60 ? m + 'm ago' : Math.round(m / 60) + 'h ago'; };
+  document.getElementById('feedlist').innerHTML = feedState.events.slice(0, 60)
+    .map((e, n) => {
+      const c = CAT[e.cat] || CAT.other;
+      const [k, kc] = FEED_KIND[e.kind] || ['?', 'var(--dim)'];
+      return `<div class="fe ${Date.now() - e.t < 20000 ? 'fresh' : ''}"
+        style="border-left-color:${c.col}" data-n="${n}">
+        <span>${c.emoji}</span><div>
+        <span class="fe-k" style="color:${kc}">${k}</span> ${e.title}<br>
+        <span class="fe-m">${e.src}${e.detail ? ' · ' + e.detail : ''} · ${ago(e.t)}</span>
+        </div></div>`;
+    }).join('');
+  document.getElementById('feed-note').textContent =
+    feedState.events.length ? `(${feedState.events.length})` : '(watching)';
+  document.querySelectorAll('#feedlist .fe').forEach(el => el.onclick = () => {
+    const e = feedState.events[+el.dataset.n];
+    if (e.lon != null) map.flyTo({ center: [e.lon, e.lat], zoom: 13 });
+  });
+}
+
+// --- loiter detection: low aircraft circling tight near an active incident ---
+const AIR_HIST = {};
+function kmDist(lat1, lon1, lat2, lon2) {
+  const R = 6371, dLa = (lat2 - lat1) * Math.PI / 180,
+    dLo = (lon2 - lon1) * Math.PI / 180;
+  const s = Math.sin(dLa / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) *
+    Math.cos(lat2 * Math.PI / 180) * Math.sin(dLo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+function detectLoiter() {
+  const now = Date.now() / 1000;
+  const seen = new Set();
+  for (const a of state.planes) {
+    if (a.alt_baro === 'ground') continue;
+    seen.add(a.hex);
+    (AIR_HIST[a.hex] = AIR_HIST[a.hex] || []).push([a.lon, a.lat, now]);
+    if (AIR_HIST[a.hex].length > 15) AIR_HIST[a.hex].shift();
+  }
+  for (const hex of Object.keys(AIR_HIST)) // forget aircraft gone > 5 min
+    if (!seen.has(hex) && now - AIR_HIST[hex].at(-1)[2] > 300) delete AIR_HIST[hex];
+  for (const a of state.planes) {
+    const h = AIR_HIST[a.hex];
+    if (!h || h.length < 10 || now - h[0][2] < 100) continue; // ≥100 s of track
+    const alt = a.alt_baro === 'ground' ? 0 : (a.alt_baro || 0);
+    if (!alt || alt > 7000) continue;         // low = working, not transiting
+    const cLon = h.reduce((s, p) => s + p[0], 0) / h.length;
+    const cLat = h.reduce((s, p) => s + p[1], 0) / h.length;
+    if (h.some(p => kmDist(p[1], p[0], cLat, cLon) > 2)) continue; // not tight
+    let best = null;
+    for (const f of state.esaFeats) {
+      const d = kmDist(f.geometry.coordinates[1], f.geometry.coordinates[0],
+        a.lat, a.lon);
+      if (d < 5 && (!best || d < best.d)) best = { f, d };
+    }
+    if (!best) continue;
+    const key = a.hex + '|' + best.f.properties.guid;
+    if (feedState.loiterSeen[key] && now - feedState.loiterSeen[key] < 1800)
+      continue; // don't re-alert the same pairing for 30 min
+    feedState.loiterSeen[key] = now;
+    feedEvent('loiter', 'aircraft', {
+      title: `${(a.flight || a.hex).trim()} loitering near ${best.f.properties.suburb}`,
+      cat: 'air', lon: a.lon, lat: a.lat,
+      detail: `${best.f.properties.title} · ${best.d.toFixed(1)} km · ${alt.toLocaleString()} ft`
+    });
+    saveFeed();
+  }
+}
 
 map.on('load', () => {
   map.addImage('plane-lo',  planeIcon('#e0af68'));
   map.addImage('plane-hi',  planeIcon('#7dcfff'));
   map.addImage('plane-mil', planeIcon('#f7768e'));
+
+  for (const cat of ['crash', 'fire', 'burn', 'medical', 'rescue', 'hazmat',
+    'storm', 'other'])
+    map.addImage('esa-' + cat, incidentIcon(cat));
+  // RFS flames carry the official alert-level colour + the white NSW stroke
+  map.addImage('rfs-emergency', incidentIcon('fire', '#f7768e', '#c0caf5'));
+  map.addImage('rfs-watch',     incidentIcon('fire', '#e0af68', '#c0caf5'));
+  map.addImage('rfs-advice',    incidentIcon('fire', '#7dcfff', '#c0caf5'));
+  map.addImage('rfs-other',     incidentIcon('fire', '#565f89', '#c0caf5'));
 
   map.addSource('aircraft', { type: 'geojson',
     data: { type: 'FeatureCollection', features: [] } });
@@ -214,22 +408,15 @@ map.on('load', () => {
   map.addSource('esa', { type: 'geojson',
     data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
-    id: 'esa', type: 'circle', source: 'esa',
-    paint: {
-      'circle-radius': 7,
-      'circle-color': ['match', ['get', 'agency'],
-        'Fire', '#f7768e', 'Ambulance', '#9ece6a', 'Rescue', '#7dcfff',
-        '#e0af68'],
-      'circle-opacity': 0.85,
-      'circle-stroke-width': 1.5,
-      'circle-stroke-color': '#1a1b26'
-    }
+    id: 'esa', type: 'symbol', source: 'esa',
+    layout: { 'icon-image': ['get', 'icon'], 'icon-allow-overlap': true }
   });
   map.on('click', 'esa', e => {
     const p = e.features[0].properties;
     new maplibregl.Popup({ offset: 12 })
       .setLngLat(e.features[0].geometry.coordinates)
-      .setHTML(`<b>${p.title}</b><br>status: ${p.status}<br>
+      .setHTML(`<b>${p.title}</b><br>
+        type: ${(CAT[p.cat] || CAT.other).label}<br>status: ${p.status}<br>
         agency: ${p.agency}<br>suburb: ${p.suburb}<br>updated: ${p.updated}`)
       .addTo(map);
   });
@@ -265,16 +452,13 @@ map.on('load', () => {
   map.addSource('rfs', { type: 'geojson',
     data: { type: 'FeatureCollection', features: [] } });
   map.addLayer({
-    id: 'rfs', type: 'circle', source: 'rfs',
-    paint: {
-      'circle-radius': 7,
-      'circle-color': ['match', ['get', 'category'],
-        'Emergency Warning', '#f7768e', 'Watch and Act', '#e0af68',
-        'Advice', '#7dcfff', '#565f89'],
-      'circle-opacity': 0.85,
-      // white stroke = NSW RFS; dark stroke = ACT ESA
-      'circle-stroke-width': 1.5,
-      'circle-stroke-color': '#c0caf5'
+    id: 'rfs', type: 'symbol', source: 'rfs',
+    // flame icon per alert level; white ring = NSW RFS, dark ring = ACT ESA
+    layout: {
+      'icon-image': ['match', ['get', 'category'],
+        'Emergency Warning', 'rfs-emergency', 'Watch and Act', 'rfs-watch',
+        'Advice', 'rfs-advice', 'rfs-other'],
+      'icon-allow-overlap': true
     }
   });
   map.on('click', 'rfs', e => {
@@ -385,6 +569,7 @@ map.on('load', () => {
   fetchTransit();   setInterval(fetchTransit, 15000);
   fetchNews();      setInterval(fetchNews, 10 * 60000);
   fetchBom();       setInterval(fetchBom, 5 * 60000);
+  renderFeed();     setInterval(renderFeed, 60000); // keep the ages fresh
 });
 
 function setStatus(ok, text) {
@@ -400,6 +585,7 @@ async function fetchAircraft() {
     const d = await r.json();
     state.planes = (d.ac || []).filter(a => a.lat != null);
     renderAircraft();
+    detectLoiter();
     setStatus(true, `updated ${new Date().toLocaleTimeString()}`);
   } catch (e) { setStatus(false, 'aircraft feed error'); }
 }
@@ -487,18 +673,26 @@ async function fetchIncidents() {
         });
         // feed ships [lat, lon] as strings; GeoJSON wants numeric [lon, lat]
         const [lat, lon] = i.point.coordinates.map(Number);
+        const cat = categorise(i.title);
         return {
           type: 'Feature',
           geometry: { type: 'Point', coordinates: [lon, lat] },
           properties: {
             title: i.title, agency: kv.agency || '?',
             status: kv.status || '?', suburb: kv.suburb || '?',
-            updated: kv.updated || '?'
+            updated: kv.updated || '?',
+            guid: i.guid || i.title, cat, icon: 'esa-' + cat
           }
         };
       });
     map.getSource('esa').setData({ type: 'FeatureCollection', features: feats });
     count.textContent = `(${feats.length})`;
+    state.esaFeats = feats;
+    feedDiff('ACT ESA', feats.map(f => ({
+      id: f.properties.guid, title: f.properties.title,
+      status: f.properties.status, cat: f.properties.cat,
+      detail: f.properties.suburb,
+      lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] })));
   } catch (e) {
     count.textContent = '(needs serve.py)';
   }
@@ -614,6 +808,11 @@ async function fetchRfs() {
         f.geometry.coordinates[1] > -36.5 && f.geometry.coordinates[1] < -34.2);
     map.getSource('rfs').setData({ type: 'FeatureCollection', features: feats });
     count.textContent = `(${feats.length})`;
+    feedDiff('NSW RFS', feats.map(f => ({
+      id: f.properties.title, title: f.properties.title,
+      status: f.properties.status, cat: 'fire',
+      detail: f.properties.category,
+      lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] })));
   } catch (e) {
     count.textContent = '(needs serve.py)';
   }
@@ -630,6 +829,15 @@ async function fetchPower() {
     const pins = geo.features.filter(f => f.geometry.type === 'Point');
     const live = pins.filter(f => f.properties.sev !== 'scheduled').length;
     count.textContent = `(${live} live / ${pins.length - live} sched)`;
+    // scheduled works stay out of the feed — only live outages are events
+    feedDiff('power', pins.filter(f => f.properties.sev !== 'scheduled')
+      .map(f => ({
+        id: String(f.properties.id),
+        title: `${f.properties.otype || 'power'} outage — ` +
+          String(f.properties.where || f.properties.id).slice(0, 40),
+        status: f.properties.sev + '|' + (f.properties.eta || ''),
+        cat: 'power', detail: `${f.properties.customers ?? '?'} customers`,
+        lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] })));
   } catch (e) {
     count.textContent = '(needs serve.py)';
   }

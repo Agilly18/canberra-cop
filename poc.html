@@ -15,7 +15,7 @@
     font-family: monospace; color: var(--fg); }
   #map { position: absolute; inset: 0; }
 
-  #panel { position: absolute; top: 12px; left: 12px; width: 320px;
+  #panel { position: absolute; z-index: 5; top: 12px; left: 12px; width: 320px;
     max-height: calc(100vh - 24px); overflow-y: auto;
     background: var(--panel); border: 1px solid var(--dim); border-radius: 8px;
     padding: 14px 18px; font-size: 14px; backdrop-filter: blur(4px); }
@@ -96,6 +96,9 @@
   #health .hs { display: flex; align-items: center; gap: 3px; cursor: default; }
   #health .hs i { width: 7px; height: 7px; border-radius: 50%;
     background: #565f89; display: inline-block; }
+  #feed-filter { cursor: pointer; color: var(--dim); }
+  #feed-filter:hover { color: var(--fg); }
+  #feed-filter.sig { color: var(--cyan); }
   #feedlist { max-height: 230px; overflow-y: auto; margin-top: 4px; }
   .fe { display: flex; gap: 7px; padding: 3px 6px; margin: 3px 0;
     border-left: 3px solid var(--dim); border-radius: 0 4px 4px 0;
@@ -116,12 +119,27 @@
   .maplibregl-popup-content { background: var(--panel); color: var(--fg);
     font-family: monospace; font-size: 12px; border: 1px solid var(--dim); }
   .maplibregl-popup-tip { border-top-color: var(--panel) !important; }
+
+  /* phones: the panel becomes a bottom sheet — collapsed peek shows title +
+     stress index, tapping the handle (or title) expands it over the map */
+  #sheet-handle { display: none; }
+  @media (max-width: 700px) {
+    #panel { top: auto; left: 8px; right: 8px; bottom: 0; width: auto;
+      max-height: 158px; overflow: hidden;
+      border-radius: 12px 12px 0 0; border-bottom: none;
+      transition: max-height .25s ease; padding-top: 5px; }
+    #panel.expanded { max-height: 78vh; overflow-y: auto; }
+    #sheet-handle { display: block; width: 44px; height: 4px;
+      margin: 0 auto 8px; border-radius: 2px; background: var(--dim);
+      cursor: pointer; }
+  }
 </style>
 </head>
 <body>
 <div id="map"></div>
 
 <div id="panel">
+  <div id="sheet-handle" title="tap to expand"></div>
   <h1>CANBERRA COP</h1>
   <div class="sub">proof of concept · all-source</div>
 
@@ -157,7 +175,9 @@
   <div class="legend"><b class="lo">▲ &lt;10k ft</b><b class="hi">▲ ≥10k ft</b><b class="ml">▲ military</b></div>
   <div id="aclist"></div>
   <hr>
-  <div class="row"><span class="k">event feed</span><span id="feed-note" style="color:var(--dim)"></span></div>
+  <div class="row"><span class="k">event feed</span>
+    <span><span id="feed-filter" title="significant hides routine ambulance / planned-burn churn">all</span>
+    <span id="feed-note" style="color:var(--dim)"></span></span></div>
   <div id="feedlist"></div>
   <hr>
   <div class="row"><span class="k">canberra news</span><span id="news-note" style="color:var(--dim)"></span></div>
@@ -366,10 +386,17 @@ function saveFeed() {
 const FEED_KIND = { new: ['NEW', 'var(--green)'], update: ['UPD', 'var(--amber)'],
   cleared: ['CLR', 'var(--dim)'], loiter: ['AIR', 'var(--red)'],
   corr: ['CORR', '#bb9af7'] };
+// display-only noise filter: significant mode hides the routine ambulance /
+// planned-burn churn; loiter + corr always show. Events are recorded either way.
+const feedFilter = { sig: localStorage.getItem('copFeedSig') === '1' };
+const feedRoutine = e => e.kind !== 'loiter' && e.kind !== 'corr' &&
+  (e.cat === 'medical' || e.cat === 'burn');
 function renderFeed() {
   const ago = t => { const m = Math.round((Date.now() - t) / 60000);
     return m < 1 ? 'now' : m < 60 ? m + 'm ago' : Math.round(m / 60) + 'h ago'; };
-  document.getElementById('feedlist').innerHTML = feedState.events.slice(0, 60)
+  const shown = feedState.events
+    .filter(e => !feedFilter.sig || !feedRoutine(e)).slice(0, 60);
+  document.getElementById('feedlist').innerHTML = shown
     .map((e, n) => {
       const c = CAT[e.cat] || CAT.other;
       const [k, kc] = FEED_KIND[e.kind] || ['?', 'var(--dim)'];
@@ -380,13 +407,22 @@ function renderFeed() {
         <span class="fe-m">${e.src}${e.detail ? ' · ' + e.detail : ''} · ${ago(e.t)}</span>
         </div></div>`;
     }).join('');
-  document.getElementById('feed-note').textContent =
-    feedState.events.length ? `(${feedState.events.length})` : '(watching)';
+  const hidden = feedState.events.length - shown.length;
+  document.getElementById('feed-note').textContent = feedState.events.length
+    ? `(${shown.length}${hidden > 0 ? ` · ${hidden} hidden` : ''})` : '(watching)';
+  const fl = document.getElementById('feed-filter');
+  fl.textContent = feedFilter.sig ? 'significant' : 'all';
+  fl.className = feedFilter.sig ? 'sig' : '';
   document.querySelectorAll('#feedlist .fe').forEach(el => el.onclick = () => {
-    const e = feedState.events[+el.dataset.n];
+    const e = shown[+el.dataset.n];
     if (e.lon != null) map.flyTo({ center: [e.lon, e.lat], zoom: 13 });
   });
 }
+document.getElementById('feed-filter').onclick = () => {
+  feedFilter.sig = !feedFilter.sig;
+  localStorage.setItem('copFeedSig', feedFilter.sig ? '1' : '0');
+  renderFeed();
+};
 
 // --- loiter detection: low aircraft circling tight near an active incident ---
 const AIR_HIST = {};
@@ -790,6 +826,12 @@ map.on('load', () => {
 
 document.getElementById('stress').onclick = () =>
   document.getElementById('stress-parts').classList.toggle('open');
+
+// bottom-sheet expand/collapse (mobile only — the class is inert on desktop)
+const sheetToggle = () =>
+  document.getElementById('panel').classList.toggle('expanded');
+document.getElementById('sheet-handle').onclick = sheetToggle;
+document.querySelector('#panel h1').onclick = sheetToggle;
 
 // SITREP: serve.py bundles current feed state → local Ollama writes the
 // summary. Server caches 5 min; generation itself can take ~15-30 s.

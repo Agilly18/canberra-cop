@@ -63,6 +63,14 @@ def load_env():
 
 
 _env = load_env()
+
+
+def _cfg(key, default=None):
+    """Config value: real environment wins (so docker-compose `environment:`
+    works), then the .env file, then the default."""
+    return os.environ.get(key) or _env.get(key, default)
+
+
 TOMTOM_KEY = _env.get("TOMTOM_API_KEY", "")
 FIRMS_KEY = _env.get("FIRMS_MAP_KEY", "")
 
@@ -866,9 +874,9 @@ def tomtom_tile(z, x, y):
 # upstream load than a single live viewer. Snapshots are gzipped and only
 # written when the body actually changed (incident feeds are near-static when
 # quiet), which keeps the store to a few MB over the retention window.
-HISTORY_DB = _env.get("COP_DB",
-                      os.path.join(os.path.dirname(__file__), "history.db"))
-HISTORY_HOURS = int(_env.get("COP_HISTORY_HOURS", "72"))
+HISTORY_DB = _cfg("COP_DB",
+                  os.path.join(os.path.dirname(__file__), "history.db"))
+HISTORY_HOURS = int(_cfg("COP_HISTORY_HOURS", "72"))
 
 # source name -> (body function, poll interval seconds). The interval matches
 # each feed's own cache TTL — polling faster would just re-read the same cache.

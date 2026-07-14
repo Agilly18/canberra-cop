@@ -254,6 +254,7 @@
         <button id="zone-poly" title="draw a polygon zone: click vertices, double-click to close">⬠ poly</button>
       </div>
       <label><input type="checkbox" id="tog-notify"> desktop alerts <span id="notify-note" class="k"></span></label>
+      <label><input type="checkbox" id="tog-sound"> alert sounds</label>
     </div>
   </div>
   <hr>
@@ -681,7 +682,33 @@ document.getElementById('rb-btn').onclick = () => {
 // --- desktop notifications: needs a secure context (https or localhost),
 // so plain http://cop.lan degrades to a note until the tunnel exists ---
 let notifyOn = localStorage.getItem('copNotify') === '1';
+// --- alert sounds: Web Audio two-tone blip, no secure context needed so it
+// works on plain http where the Notification API doesn't ---
+let soundOn = localStorage.getItem('copSound') === '1';
+let audioCtx = null;
+function beep() {
+  if (!soundOn) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const t0 = audioCtx.currentTime;
+    [[880, 0], [660, 0.14]].forEach(([hz, dt]) => {
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+      o.type = 'sine'; o.frequency.value = hz;
+      g.gain.setValueAtTime(0.0001, t0 + dt);
+      g.gain.exponentialRampToValueAtTime(0.18, t0 + dt + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + dt + 0.13);
+      o.connect(g).connect(audioCtx.destination);
+      o.start(t0 + dt); o.stop(t0 + dt + 0.15);
+    });
+  } catch (e) {}
+}
+// autoplay policy: a context created before any interaction starts suspended;
+// first gesture anywhere on the page unlocks it
+addEventListener('pointerdown', () => { if (audioCtx) audioCtx.resume(); },
+  { once: true, capture: true });
 function notify(title, body) {
+  beep();
   if (!notifyOn || typeof Notification === 'undefined' ||
       Notification.permission !== 'granted') return;
   try { new Notification(title, { body, tag: title + '|' + body }); } catch (e) {}
@@ -703,6 +730,13 @@ function notify(title, body) {
       localStorage.setItem('copNotify', notifyOn ? '1' : '0');
     };
   }
+  const sbox = document.getElementById('tog-sound');
+  sbox.checked = soundOn;
+  sbox.onchange = e => {
+    soundOn = e.target.checked;
+    localStorage.setItem('copSound', soundOn ? '1' : '0');
+    if (soundOn) beep();  // the click is the gesture that unlocks audio; doubles as a test tone
+  };
 }
 
 // --- event feed: diff each poll against known state, log what changed ---

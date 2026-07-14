@@ -715,7 +715,9 @@ function notify(title, body) {
 }
 {
   const box = document.getElementById('tog-notify');
-  if (typeof Notification === 'undefined') {
+  // Chrome hides the API on insecure origins; Firefox exposes it but rejects
+  // requestPermission — check the context itself so both get the note
+  if (typeof Notification === 'undefined' || !window.isSecureContext) {
     box.disabled = true;
     document.getElementById('notify-note').textContent = '(needs https)';
   } else {

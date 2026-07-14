@@ -22,6 +22,10 @@ Serves the static page and relays two feeds a browser can't reach directly:
   active now or starting within 24 h
 - /quakes — Geoscience Australia earthquakes (7-day window), slimmed to
   Australian events plus a box around SE Australia
+- /aircraft — airplanes.live positions near Canberra (verbatim relay; one
+  shared upstream stream + snapshotted for the time slider)
+- /wind — Open-Meteo 5x5 wind grid over the ACT (verbatim relay)
+- /weather — Open-Meteo current conditions for Canberra (verbatim relay)
 Run:  python3 serve.py  →  http://localhost:8899
 """
 import csv
@@ -697,6 +701,73 @@ def quakes_body():
     return _quakes_cache["body"]
 
 
+# --- aircraft (airplanes.live relay) -----------------------------------------
+# The browser used to hit airplanes.live directly (it sends CORS headers), but
+# relaying gives one shared upstream stream for all viewers AND lets the
+# recorder snapshot positions for the time slider. Body is the verbatim
+# upstream JSON ({"ac": [...]}) so the client parser is unchanged.
+CBR_LAT, CBR_LON, CBR_RADIUS_NM = -35.28, 149.13, 60  # keep in sync w/ poc.html CBR
+AIRCRAFT_URL = (f"https://api.airplanes.live/v2/point/"
+                f"{CBR_LAT}/{CBR_LON}/{CBR_RADIUS_NM}")
+AIRCRAFT_CACHE_SECONDS = 12  # matches the client poll; polite floor is ~10 s
+_aircraft_cache = {"time": 0.0, "body": b'{"ac":[]}'}
+
+
+def aircraft_body():
+    if time.time() - _aircraft_cache["time"] > AIRCRAFT_CACHE_SECONDS:
+        req = urllib.request.Request(AIRCRAFT_URL,
+                                     headers={"User-Agent": "argus/0.01"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = r.read()
+        json.loads(body)  # refuse to cache junk
+        _aircraft_cache.update(time=time.time(), body=body)
+    return _aircraft_cache["body"]
+
+
+# --- wind field (Open-Meteo relay) --------------------------------------------
+# Same 5x5 grid over the ACT as poc.html's WIND_GRID; one multi-location call.
+# Relayed (rather than browser-direct) so the recorder can snapshot it.
+_WIND_LATS = ",".join(str(la) for la in (-34.95, -35.2, -35.45, -35.7, -35.95)
+                      for _ in range(5))
+_WIND_LONS = ",".join(str(lo) for _ in range(5)
+                      for lo in (148.65, 148.95, 149.25, 149.55, 149.85))
+WIND_URL = ("https://api.open-meteo.com/v1/forecast"
+            f"?latitude={_WIND_LATS}&longitude={_WIND_LONS}"
+            "&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m")
+WIND_CACHE_SECONDS = 1800  # client refreshes every 30 min
+_wind_cache = {"time": 0.0, "body": b"[]"}
+
+
+def wind_body():
+    if time.time() - _wind_cache["time"] > WIND_CACHE_SECONDS:
+        with urllib.request.urlopen(WIND_URL, timeout=10) as r:
+            body = r.read()
+        json.loads(body)
+        _wind_cache.update(time=time.time(), body=body)
+    return _wind_cache["body"]
+
+
+# --- current weather (Open-Meteo relay) ---------------------------------------
+# Mirrors poc.html's fetchWeather call exactly (superset of _wx_current's
+# fields — that one stays as-is for the SITREP path). Verbatim body relay.
+WEATHER_URL = (f"https://api.open-meteo.com/v1/forecast"
+               f"?latitude={CBR_LAT}&longitude={CBR_LON}"
+               "&current=temperature_2m,apparent_temperature,precipitation,"
+               "weather_code,wind_speed_10m,wind_direction_10m,wind_gusts_10m"
+               "&timezone=Australia%2FSydney")
+WEATHER_CACHE_SECONDS = 600  # client polls every 10 min
+_weather_cache = {"time": 0.0, "body": b"{}"}
+
+
+def weather_body():
+    if time.time() - _weather_cache["time"] > WEATHER_CACHE_SECONDS:
+        with urllib.request.urlopen(WEATHER_URL, timeout=10) as r:
+            body = r.read()
+        json.loads(body)
+        _weather_cache.update(time=time.time(), body=body)
+    return _weather_cache["body"]
+
+
 # --- SITREP: bundle the cached feed state and have a local LLM write the
 # situation summary. Ollama runs on the desktop; its firewall admits only
 # ace2, which is exactly where this server lives in production.
@@ -888,11 +959,23 @@ HISTORY_SOURCES = {
     "closures": (closures_body, 600),
     "quakes": (quakes_body, 600),
     "airq": (airq_body, 900),
+    # movers: recorded at 30 s (not the 12/15 s live cadence) — replay through
+    # a slider doesn't need that fidelity and it quarters the storage. Every
+    # snapshot differs (positions move), so md5 dedup never fires for these.
+    "aircraft": (aircraft_body, 30),
+    "transit": (transit_body, 30),
+    # ambient context: cheap, dedup-heavy
+    "wind": (wind_body, 1800),
+    "weather": (weather_body, 600),
+    "bom": (bom_body, 300),
+    "news": (news_body, 600),
 }
 # empty payload per source, shaped like the live body so the client's parser
-# is unchanged when a time has no snapshot at/before it (ESA is a bare list;
-# everything else is a GeoJSON FeatureCollection).
-_EMPTY_BODY = {"esa": b"[]"}
+# is unchanged when a time has no snapshot at/before it (esa/bom/news/wind are
+# bare lists, aircraft is {"ac": []}, weather is an object; everything else is
+# a GeoJSON FeatureCollection).
+_EMPTY_BODY = {"esa": b"[]", "bom": b"[]", "news": b"[]", "wind": b"[]",
+               "aircraft": b'{"ac":[]}', "weather": b"{}"}
 _EMPTY_FC = b'{"type":"FeatureCollection","features":[]}'
 
 _last_hash = {}  # source -> md5 of the last stored body, to skip duplicates
@@ -1085,6 +1168,39 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception:
                 self.send_error(502, "rfs unreachable")
+            return
+        if self.path.rstrip("/") == "/aircraft":
+            try:
+                body = aircraft_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "aircraft feed unreachable")
+            return
+        if self.path.rstrip("/") == "/wind":
+            try:
+                body = wind_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "wind feed unreachable")
+            return
+        if self.path.rstrip("/") == "/weather":
+            try:
+                body = weather_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "weather feed unreachable")
             return
         if self.path.startswith("/geocode"):
             q = urllib.parse.parse_qs(

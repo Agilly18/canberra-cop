@@ -1539,22 +1539,31 @@ let tbPaintTimer = null;
 const tbFmt = t => new Date(t * 1000).toLocaleString([],
   { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-function paintIncidents() { INCIDENT_FETCHERS.forEach(fn => fn()); }
+// everything with recorded history — repainted on every scrub step and on
+// return to live (all local serve.py hits, so a scrub is cheap)
+const REPLAY_FETCHERS = [fetchAircraft, fetchTransit, fetchWind, fetchWeather,
+  fetchBom, fetchNews];
+function paintIncidents() {
+  INCIDENT_FETCHERS.forEach(fn => fn());
+  REPLAY_FETCHERS.forEach(fn => fn());
+}
 
 function clearLiveLayers() {
-  ['aircraft', 'transit', 'trails'].forEach(s => {
+  // trails have no history (v1) — clear on entering replay. aircraft/transit
+  // are repopulated from /history by the repaint that follows.
+  ['trails'].forEach(s => {
     const src = map.getSource(s);
     if (src) src.setData({ type: 'FeatureCollection', features: [] });
   });
 }
 
-// keep radar/wind hidden in replay; restore to their toggle state when live
+// radar is live-only (RainViewer raster tiles aren't recorded) — hide it in
+// replay, restore to its toggle state when live. wind replays from history,
+// so its visibility just follows its toggle.
 function setLiveRastersVisible(vis) {
-  [['radar', 'tog-radar'], ['wind', 'tog-wind']].forEach(([lyr, tog]) => {
-    if (!map.getLayer(lyr)) return;
-    const on = vis && document.getElementById(tog).checked;
-    map.setLayoutProperty(lyr, 'visibility', on ? 'visible' : 'none');
-  });
+  if (!map.getLayer('radar')) return;
+  const on = vis && document.getElementById('tog-radar').checked;
+  map.setLayoutProperty('radar', 'visibility', on ? 'visible' : 'none');
 }
 
 function enterReplay(t) {
@@ -1580,7 +1589,7 @@ function goLive() {
   document.getElementById('tb-live').textContent = '● LIVE';
   if (wasReplay) {
     setLiveRastersVisible(true);
-    paintIncidents(); fetchAircraft(); fetchTransit(); fetchWind();
+    paintIncidents();   // covers all layers + sidebars via REPLAY_FETCHERS
   }
 }
 
@@ -1693,20 +1702,25 @@ function setStatus(ok, text) {
 }
 
 async function fetchAircraft() {
-  if (REPLAY) return;   // no position history — frozen during replay
+  const wasReplay = !!REPLAY;
   try {
-    // airplanes.live not adsb.lol: same readsb API shape, but this one sends
-    // CORS headers so it works from a plain browser page without a proxy
-    const r = await fetch(`https://api.airplanes.live/v2/point/${CBR.lat}/${CBR.lon}/${CBR.radiusNm}`);
+    // serve.py relay of airplanes.live (one shared upstream stream for all
+    // viewers + snapshots for the time slider); /history/aircraft in replay
+    const r = await fetch(feedURL('aircraft'));
     const d = await r.json();
     state.planes = (d.ac || []).filter(a => a.lat != null);
     renderAircraft();
+    if (wasReplay) return;  // historical positions: display only — no
+                            // loiter/geofence alerts, trails, or health marks
     detectLoiter();
     geofence();
     renderTrails();
     setStatus(true, `updated ${new Date().toLocaleTimeString()}`);
     mark('air', true);
-  } catch (e) { setStatus(false, 'aircraft feed error'); mark('air', false); }
+  } catch (e) {
+    if (wasReplay) return;
+    setStatus(false, 'aircraft feed error'); mark('air', false);
+  }
 }
 
 function renderAircraft() {
@@ -1772,21 +1786,13 @@ function windIcon(colour) {
   g.closePath(); g.fill();
   return g.getImageData(0, 0, 26, 26);
 }
-// 5×5 grid over the ACT + surrounds; one multi-location Open-Meteo call
-const WIND_GRID = (() => {
-  const lats = [], lons = [];
-  for (const la of [-34.95, -35.2, -35.45, -35.7, -35.95])
-    for (const lo of [148.65, 148.95, 149.25, 149.55, 149.85]) {
-      lats.push(la); lons.push(lo);
-    }
-  return { lats, lons };
-})();
+// the 5×5 wind grid now lives in serve.py (WIND_URL) so it can be recorded
 async function fetchWind() {
-  if (REPLAY) return;   // current wind, not historical — frozen during replay
+  const wasReplay = !!REPLAY;
   try {
-    const r = await fetch('https://api.open-meteo.com/v1/forecast' +
-      `?latitude=${WIND_GRID.lats.join(',')}&longitude=${WIND_GRID.lons.join(',')}` +
-      '&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m');
+    // serve.py relay of the Open-Meteo grid call (recorded for the slider);
+    // /history/wind in replay
+    const r = await fetch(feedURL('wind'));
     const arr = await r.json();
     const feats = (Array.isArray(arr) ? arr : [arr]).map(p => {
       const c = p.current, s = c.wind_speed_10m;
@@ -1798,8 +1804,8 @@ async function fetchWind() {
           icon: 'wind-' + (s >= 60 ? 3 : s >= 40 ? 2 : s >= 20 ? 1 : 0) } };
     });
     map.getSource('wind').setData({ type: 'FeatureCollection', features: feats });
-    mark('wind', true);
-  } catch (e) { mark('wind', false); }
+    if (!wasReplay) mark('wind', true);
+  } catch (e) { if (!wasReplay) mark('wind', false); }
 }
 let windStarted = false;
 document.getElementById('tog-wind').onchange = e => {
@@ -1812,11 +1818,13 @@ document.getElementById('tog-wind').onchange = e => {
 };
 
 async function fetchWeather() {
+  const wasReplay = !!REPLAY;
   try {
-    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${CBR.lat}&longitude=${CBR.lon}` +
-      '&current=temperature_2m,apparent_temperature,precipitation,weather_code,' +
-      'wind_speed_10m,wind_direction_10m,wind_gusts_10m&timezone=Australia%2FSydney');
+    // serve.py relay of Open-Meteo current conditions (recorded for the
+    // slider); /history/weather in replay shows conditions as they were
+    const r = await fetch(feedURL('weather'));
     const c = (await r.json()).current;
+    if (!c) throw new Error('no snapshot');
     const dir = ['N','NE','E','SE','S','SW','W','NW'][Math.round(c.wind_direction_10m / 45) % 8];
     document.getElementById('wx-temp').textContent =
       `${c.temperature_2m}°C / ${c.apparent_temperature}°C`;
@@ -1825,13 +1833,15 @@ async function fetchWeather() {
     document.getElementById('wx-cond').textContent =
       `${WMO[c.weather_code] || 'code ' + c.weather_code}` +
       (c.precipitation > 0 ? `, ${c.precipitation} mm` : '');
+    if (wasReplay) return;  // historical wx: display only, keep stress/health live
     state.wx = { temp: c.temperature_2m, gust: c.wind_gusts_10m,
       precip: c.precipitation };
     renderStress();
     mark('wx', true);
   } catch (e) {
-    document.getElementById('wx-cond').textContent = 'wx error';
-    mark('wx', false);
+    document.getElementById('wx-cond').textContent =
+      wasReplay ? 'no wx snapshot' : 'wx error';
+    if (!wasReplay) mark('wx', false);
   }
 }
 
@@ -2054,17 +2064,19 @@ async function fetchPower() {
 }
 
 async function fetchTransit() {
-  if (REPLAY) return;   // no position history — frozen during replay
+  const wasReplay = !!REPLAY;
   const count = document.getElementById('transit-count');
   try {
-    const r = await fetch('transit');
+    const r = await fetch(feedURL('transit'));
     if (!r.ok) throw new Error(r.status);
     const geo = await r.json();
-    // stamp position age (staleness fade) + collect breadcrumb history
-    const now = Date.now() / 1000;
+    // stamp position age (staleness fade) — relative to the snapshot time in
+    // replay, else every historical position would render fully faded
+    const now = wasReplay ? REPLAY : Date.now() / 1000;
     geo.features.forEach(f => {
       const p = f.properties;
       p.age = p.ts ? Math.max(0, Math.round(now - p.ts)) : 0;
+      if (wasReplay) return;  // no breadcrumb collection off historical data
       const id = p.label || p.route;
       if (!id) return;
       const h = TRANSIT_HIST[id] = TRANSIT_HIST[id] || { mode: p.mode, pts: [] };
@@ -2073,13 +2085,15 @@ async function fetchTransit() {
       if (!last || last[0] !== lon || last[1] !== lat) h.pts.push([lon, lat, now]);
       if (h.pts.length > 16) h.pts.shift();
     });
-    for (const k of Object.keys(TRANSIT_HIST))   // forget vanished vehicles
-      if (now - TRANSIT_HIST[k].pts.at(-1)[2] > 300) delete TRANSIT_HIST[k];
     map.getSource('transit').setData(geo);
     count.textContent = `(${geo.features.length})`;
+    if (wasReplay) return;
+    for (const k of Object.keys(TRANSIT_HIST))   // forget vanished vehicles
+      if (now - TRANSIT_HIST[k].pts.at(-1)[2] > 300) delete TRANSIT_HIST[k];
     renderTrails();
     mark('transit', true);
   } catch (e) {
+    if (wasReplay) return;
     count.textContent = '(needs serve.py)';
     mark('transit', false);
   }
@@ -2174,21 +2188,24 @@ async function fetchQuakes() {
 }
 
 async function fetchBom() {
+  const wasReplay = !!REPLAY;
   const box = document.getElementById('bomwarn');
   try {
-    const r = await fetch('bom');
+    const r = await fetch(feedURL('bom'));
     if (!r.ok) throw new Error(r.status);
     const warns = await r.json();
     // severity order so the worst sits on top
     const rank = { major: 0, moderate: 1, minor: 2 };
     warns.sort((a, b) => (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3));
-    state.bomWarns = warns;
-    renderStress();
-    // new / severity-changed warnings become feed entries (no geometry,
-    // so the entries don't fly-to on click)
-    feedDiff('BOM', warns.map(w => ({ id: String(w.id),
-      title: w.short || w.title, status: w.severity || '?',
-      cat: categorise(w.title), detail: w.severity || '' })));
+    if (!wasReplay) {  // historical warnings render, but don't feed stress/diff
+      state.bomWarns = warns;
+      renderStress();
+      // new / severity-changed warnings become feed entries (no geometry,
+      // so the entries don't fly-to on click)
+      feedDiff('BOM', warns.map(w => ({ id: String(w.id),
+        title: w.short || w.title, status: w.severity || '?',
+        cat: categorise(w.title), detail: w.severity || '' })));
+    }
     box.className = warns.length ? 'has-warn' : '';
     box.innerHTML = warns.map(w => {
       const t = w.expires ? new Date(w.expires) : null;
@@ -2200,11 +2217,11 @@ async function fetchBom() {
       </div>`;
     }).join('');
     box.querySelectorAll('.bw').forEach(el => el.onclick = () => toggleBom(el));
-    mark('bom', true);
+    if (!wasReplay) mark('bom', true);
   } catch (e) {
     box.className = '';
     box.innerHTML = '';
-    mark('bom', false);
+    if (!wasReplay) mark('bom', false);
   }
 }
 
@@ -2227,21 +2244,25 @@ async function toggleBom(el) {
 }
 
 async function fetchNews() {
+  const wasReplay = !!REPLAY;
   const note = document.getElementById('news-note');
   try {
-    const r = await fetch('news');
+    const r = await fetch(feedURL('news'));
     if (!r.ok) throw new Error(r.status);
     const items = await r.json();
-    const ago = ts => {
-      const m = Math.round((Date.now() / 1000 - ts) / 60);
+    const ago = ts => {  // "N ago" relative to the snapshot time in replay
+      const m = Math.round(((wasReplay ? REPLAY : Date.now() / 1000) - ts) / 60);
       return m < 60 ? `${m}m` : `${Math.round(m / 60)}h`;
     };
     document.getElementById('newslist').innerHTML = items.map(i =>
       `<a href="${i.link}" target="_blank" rel="noopener">${i.title}
        <span class="src">— ${i.source}, ${ago(i.ts)} ago</span></a>`).join('');
     note.textContent = '';
-    mark('news', true);
-  } catch (e) { note.textContent = '(needs serve.py)'; mark('news', false); }
+    if (!wasReplay) mark('news', true);
+  } catch (e) {
+    if (wasReplay) return;
+    note.textContent = '(needs serve.py)'; mark('news', false);
+  }
 }
 
 // Traffic tiles cost API quota, so the layer is off by default and only

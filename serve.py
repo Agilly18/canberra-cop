@@ -163,7 +163,7 @@ def news_body():
 # (a browser can't) and bias results to the Canberra region. Results are
 # cached per query and upstream calls throttled to Nominatim's 1 req/s limit.
 NOMINATIM = "https://nominatim.openstreetmap.org/search"
-GEOCODE_UA = "argus/0.05 (personal situational-awareness map)"
+GEOCODE_UA = "argus/0.06 (personal situational-awareness map)"
 # lon,lat,lon,lat box around the ACT — biases but doesn't hard-limit results
 GEOCODE_VIEWBOX = "148.6,-35.05,149.5,-35.65"
 GEOCODE_CACHE_SECONDS = 3600
@@ -740,7 +740,7 @@ _aircraft_cache = {"time": 0.0, "body": b'{"ac":[]}'}
 def aircraft_body():
     if time.time() - _aircraft_cache["time"] > AIRCRAFT_CACHE_SECONDS:
         req = urllib.request.Request(AIRCRAFT_URL,
-                                     headers={"User-Agent": "argus/0.05"})
+                                     headers={"User-Agent": "argus/0.06"})
         with urllib.request.urlopen(req, timeout=10) as r:
             body = r.read()
         json.loads(body)  # refuse to cache junk
@@ -769,6 +769,52 @@ def wind_body():
         json.loads(body)
         _wind_cache.update(time=time.time(), body=body)
     return _wind_cache["body"]
+
+
+# --- wind field for the particle-flow layer ------------------------------------
+# A denser Open-Meteo grid than /wind's 5x5 arrows: 14x14 over the wider
+# region, converted server-side to u/v components (m/s) so the client's
+# particle advection just does bilinear lookups. Hourly refresh — a 196-point
+# multi-location call is weighted as ~196 calls by Open-Meteo, so hourly keeps
+# the day's spend around 4.7k of the 10k free budget.
+WF_NX = WF_NY = 14
+WF_LON0, WF_LON1 = 147.8, 150.4   # west, east
+WF_LAT0, WF_LAT1 = -36.6, -34.2   # south, north
+_wf_lats, _wf_lons = [], []
+for _j in range(WF_NY):
+    for _i in range(WF_NX):
+        _wf_lats.append(WF_LAT0 + (WF_LAT1 - WF_LAT0) * _j / (WF_NY - 1))
+        _wf_lons.append(WF_LON0 + (WF_LON1 - WF_LON0) * _i / (WF_NX - 1))
+WINDFIELD_URL = ("https://api.open-meteo.com/v1/forecast"
+                 f"?latitude={','.join(f'{v:.3f}' for v in _wf_lats)}"
+                 f"&longitude={','.join(f'{v:.3f}' for v in _wf_lons)}"
+                 "&current=wind_speed_10m,wind_direction_10m")
+WINDFIELD_CACHE_SECONDS = 3600
+_windfield_cache = {"time": 0.0, "body": b""}
+
+
+def windfield_body():
+    if time.time() - _windfield_cache["time"] > WINDFIELD_CACHE_SECONDS:
+        import math
+        with urllib.request.urlopen(WINDFIELD_URL, timeout=20) as r:
+            data = json.loads(r.read())
+        if isinstance(data, dict):   # single-location shape, shouldn't happen
+            data = [data]
+        u, v = [], []
+        for loc in data:
+            cur = loc.get("current", {})
+            spd = (cur.get("wind_speed_10m") or 0) / 3.6   # km/h -> m/s
+            # meteorological direction = where wind comes FROM; flow vector
+            # points the opposite way
+            to_rad = math.radians(((cur.get("wind_direction_10m") or 0) + 180) % 360)
+            u.append(round(spd * math.sin(to_rad), 2))
+            v.append(round(spd * math.cos(to_rad), 2))
+        _windfield_cache.update(time=time.time(), body=json.dumps({
+            "nx": WF_NX, "ny": WF_NY,
+            "lon0": WF_LON0, "lon1": WF_LON1,
+            "lat0": WF_LAT0, "lat1": WF_LAT1,
+            "u": u, "v": v}).encode())
+    return _windfield_cache["body"]
 
 
 # --- current weather (Open-Meteo relay) ---------------------------------------
@@ -1293,6 +1339,17 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(body)
             except Exception:
                 self.send_error(502, "wind feed unreachable")
+            return
+        if self.path.rstrip("/") == "/windfield":
+            try:
+                body = windfield_body()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            except Exception:
+                self.send_error(502, "wind field unreachable")
             return
         if self.path.rstrip("/") == "/weather":
             try:

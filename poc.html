@@ -182,6 +182,14 @@
     font-family: monospace; font-size: 12px; border: 1px solid var(--dim); }
   .maplibregl-popup-tip { border-top-color: var(--panel) !important; }
 
+  /* attribution: dark pill instead of the stock white bar */
+  .maplibregl-ctrl-attrib { background: var(--panel) !important;
+    color: var(--dim); border-radius: 8px; font-size: 11px; }
+  .maplibregl-ctrl-attrib a { color: var(--dim); }
+  .maplibregl-ctrl-attrib-button { filter: invert(0.6); }
+  .maplibregl-ctrl-scale { background: #1a1b2680; color: var(--dim);
+    border-color: var(--dim); font-family: monospace; font-size: 10px; }
+
   /* phones: the panel becomes a bottom sheet — collapsed peek shows title +
      stress index, tapping the handle (or title) expands it over the map */
   #sheet-handle { display: none; }
@@ -226,12 +234,12 @@
   <div class="sec" data-sec="layers">
     <div class="row sec-h"><span class="k">layers</span><span class="k sec-a">▾</span></div>
     <div class="sec-b">
-      <div class="row" id="basemap" style="gap:8px; justify-content:flex-start">
+      <div class="row" id="basemap" style="gap:8px; justify-content:flex-start; flex-wrap:wrap">
         <span class="k">map</span>
         <label style="margin:0" title="Tokyo-Night vector basemap"><input type="radio" name="base" value="vector" checked> dark+</label>
         <label style="margin:0"><input type="radio" name="base" value="base"> dark</label>
         <label style="margin:0"><input type="radio" name="base" value="base-street"> street</label>
-        <label style="margin:0"><input type="radio" name="base" value="base-sat"> satellite</label>
+        <label style="margin:0" title="Esri satellite imagery"><input type="radio" name="base" value="base-sat"> sat</label>
       </div>
       <div class="row" style="gap:8px; justify-content:flex-start">
         <label style="margin:0"><input type="checkbox" id="tog-hillshade"> hillshade</label>
@@ -314,6 +322,7 @@ const map = new maplibregl.Map({
   container: 'map',
   center: [CBR.lon, CBR.lat],
   zoom: 9,
+  attributionControl: false,   // re-added compact below (ⓘ pill, not a bar)
   style: {
     version: 8,
     // needed by any symbol layer with text (transit labels)
@@ -374,6 +383,15 @@ if (window.isSecureContext)
     trackUserLocation: true
   }), 'top-right');
 map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-right');
+// data credits live behind the ⓘ pill — full-width bar eats map real estate.
+// MapLibre re-opens the pill whenever sources change, so collapse it (via its
+// own toggle, keeping internal state honest) once everything has settled.
+map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
+map.once('idle', () => {
+  const a = document.querySelector('.maplibregl-ctrl-attrib');
+  if (a && a.classList.contains('maplibregl-compact-show'))
+    a.querySelector('.maplibregl-ctrl-attrib-button')?.click();
+});
 
 // --- coordinate readout (lat/lon + MGRS) ------------------------------------
 // Self-contained WGS84 → UTM → MGRS conversion (no library). Canberra is

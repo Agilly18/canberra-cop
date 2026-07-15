@@ -9,6 +9,7 @@
 <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
 <style>
   :root {
+    --panel-w: 400px;  /* #timebar's left offset derives from this */
     --bg: #1a1b26; --panel: #24283bee; --fg: #c0caf5; --dim: #565f89;
     --cyan: #7dcfff; --amber: #e0af68; --red: #f7768e; --green: #9ece6a;
   }
@@ -17,7 +18,8 @@
   #map { position: absolute; inset: 0; }
 
   /* time slider — sits along the bottom, clear of the left panel */
-  #timebar { position: absolute; z-index: 6; bottom: 12px; left: 430px;
+  #timebar { position: absolute; z-index: 6; bottom: 12px;
+    left: calc(var(--panel-w) + 62px);
     right: 12px; display: flex; align-items: center; gap: 10px;
     padding: 7px 12px; font-size: 12px;
     background: var(--panel); border: 1px solid var(--dim); border-radius: 8px; }
@@ -40,7 +42,7 @@
   .maplibregl-ctrl-bottom-right { bottom: 44px; }
   @media (max-width: 700px) { .maplibregl-ctrl-bottom-right { bottom: 205px; } }
 
-  #panel { position: absolute; z-index: 5; top: 12px; left: 12px; width: 368px;
+  #panel { position: absolute; z-index: 5; top: 12px; left: 12px; width: var(--panel-w);
     max-height: calc(100vh - 24px); overflow-y: auto;
     background: var(--panel); border: 1px solid var(--dim); border-radius: 8px;
     padding: 14px 18px; font-size: 14px; backdrop-filter: blur(4px); }

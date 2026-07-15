@@ -17,7 +17,7 @@
   #map { position: absolute; inset: 0; }
 
   /* time slider — sits along the bottom, clear of the left panel */
-  #timebar { position: absolute; z-index: 6; bottom: 12px; left: 360px;
+  #timebar { position: absolute; z-index: 6; bottom: 12px; left: 430px;
     right: 12px; display: flex; align-items: center; gap: 10px;
     padding: 7px 12px; font-size: 12px;
     background: var(--panel); border: 1px solid var(--dim); border-radius: 8px; }
@@ -40,7 +40,7 @@
   .maplibregl-ctrl-bottom-right { bottom: 44px; }
   @media (max-width: 700px) { .maplibregl-ctrl-bottom-right { bottom: 205px; } }
 
-  #panel { position: absolute; z-index: 5; top: 12px; left: 12px; width: 320px;
+  #panel { position: absolute; z-index: 5; top: 12px; left: 12px; width: 368px;
     max-height: calc(100vh - 24px); overflow-y: auto;
     background: var(--panel); border: 1px solid var(--dim); border-radius: 8px;
     padding: 14px 18px; font-size: 14px; backdrop-filter: blur(4px); }
@@ -239,7 +239,7 @@
         <label style="margin:0" title="Tokyo-Night vector basemap"><input type="radio" name="base" value="vector" checked> dark+</label>
         <label style="margin:0"><input type="radio" name="base" value="base"> dark</label>
         <label style="margin:0"><input type="radio" name="base" value="base-street"> street</label>
-        <label style="margin:0" title="Esri satellite imagery"><input type="radio" name="base" value="base-sat"> sat</label>
+        <label style="margin:0"><input type="radio" name="base" value="base-sat"> satellite</label>
       </div>
       <div class="row" style="gap:8px; justify-content:flex-start">
         <label style="margin:0"><input type="checkbox" id="tog-hillshade"> hillshade</label>

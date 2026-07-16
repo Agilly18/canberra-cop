@@ -1352,7 +1352,10 @@ map.on('load', () => {
       'icon-image': ['get', 'icon'],
       'icon-rotate': ['get', 'track'],
       'icon-allow-overlap': true,
-      'icon-rotation-alignment': 'map'
+      'icon-rotation-alignment': 'map',
+      // billboard: without this, pitch-alignment follows rotation-alignment
+      // ('map') and the sprites lie foreshortened on the terrain like decals
+      'icon-pitch-alignment': 'viewport'
     },
     // TAK-style per-entity staleness: fade as the last message ages
     paint: { 'icon-opacity': ['interpolate', ['linear'], ['get', 'seen'],
